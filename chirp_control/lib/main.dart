@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'components/nav_bar.dart';
 import './screens/home.dart';
 import './screens/scan.dart';
-import './screens/data.dart';
 import './screens/menu.dart';
+import './screens/data.dart';
 
 void main() {
   runApp(const MyApp());
@@ -44,7 +44,7 @@ class _MainNavigationState extends State<MainNavigation> {
   List<Widget> get _pages => [
     HomeScreen(onNavScan: () => _onNavTapped(1)),
     const DeviceControlPage(),
-    const DataScreen(),
+    const HistoryPage(),
     const MenuScreen(),
   ];
 
