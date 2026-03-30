@@ -3,16 +3,24 @@ import 'package:ionicons/ionicons.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../utils/scan_repo.dart';
 
-class ScanAnalysisPage extends StatefulWidget {
-  final ScanData scan;
+class CompareScansPage extends StatefulWidget {
+  final List<ScanData> scans;
 
-  const ScanAnalysisPage({super.key, required this.scan});
+  const CompareScansPage({super.key, required this.scans});
 
   @override
-  State<ScanAnalysisPage> createState() => _ScanAnalysisPageState();
+  State<CompareScansPage> createState() => _CompareScansPageState();
 }
 
-class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
+class _CompareScansPageState extends State<CompareScansPage> {
+  final List<Color> _colors = const [
+    Color(0xFF1F77B4),
+    Color(0xFFFF7F0E),
+    Color(0xFF2CA02C),
+    Color(0xFFD62728),
+    Color(0xFF9467BD),
+  ];
+
   double? _toDouble(dynamic value) {
     if (value is num) return value.toDouble();
     return double.tryParse(value.toString());
@@ -25,8 +33,8 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 
-  Map<String, double>? _calcDepthStats(List<List<dynamic>> rows) {
-    final depthValues = <double>[];
+  double? _calcSettledDepth(List<List<dynamic>> rows) {
+    final vals = <double>[];
 
     for (final row in rows) {
       if (row.length < 5) continue;
@@ -34,17 +42,43 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
       final depthMeters = _toDouble(row[2]);
       if (depthMeters == null) continue;
 
-      depthValues.add(depthMeters * 100);
+      vals.add(depthMeters * 100);
     }
 
-    if (depthValues.isEmpty) return null;
+    if (vals.isEmpty) return null;
 
-    final sum = depthValues.reduce((a, b) => a + b);
-    final avg = sum / depthValues.length;
-    final min = depthValues.reduce((a, b) => a < b ? a : b);
-    final max = depthValues.reduce((a, b) => a > b ? a : b);
+    final lastCount = vals.length >= 20 ? 20 : vals.length;
+    final lastVals = vals.sublist(vals.length - lastCount);
 
-    return {'avg': avg, 'min': min, 'max': max};
+    double total = 0;
+    for (final v in lastVals) {
+      total += v;
+    }
+
+    return total / lastVals.length;
+  }
+
+  double? _calcChange() {
+    final settledList = <double>[];
+
+    for (final scan in widget.scans) {
+      final val = _calcSettledDepth(scan.bathymetryRows);
+      if (val != null) {
+        settledList.add(val);
+      }
+    }
+
+    if (settledList.length < 2) return null;
+
+    double low = settledList.first;
+    double high = settledList.first;
+
+    for (final v in settledList) {
+      if (v < low) low = v;
+      if (v > high) high = v;
+    }
+
+    return high - low;
   }
 
   List<FlSpot> _makeDepthSpots(List<List<dynamic>> rows) {
@@ -105,20 +139,21 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
   }
 
   Widget _chartBox({
-    required List<FlSpot> spots,
+    required List<LineChartBarData> bars,
     required String emptyText,
     required String xLabel,
     required String yLabel,
-    Color lineColor = const Color(0xFF06B6D4),
   }) {
-    if (spots.isEmpty) {
+    if (bars.isEmpty) {
       return SizedBox(height: 260, child: Center(child: Text(emptyText)));
     }
 
-    double lowY = spots.first.y;
-    double highY = spots.first.y;
+    final allSpots = bars.expand((b) => b.spots).toList();
 
-    for (final spot in spots) {
+    double lowY = allSpots.first.y;
+    double highY = allSpots.first.y;
+
+    for (final spot in allSpots) {
       if (spot.y < lowY) lowY = spot.y;
       if (spot.y > highY) highY = spot.y;
     }
@@ -127,7 +162,10 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
     final extraSpace = range < 0.01 ? 1.0 : range * 0.08;
 
     final minX = 0.0;
-    final maxX = spots.last.x <= 0 ? 1.0 : spots.last.x;
+    double maxX = 1.0;
+    for (final spot in allSpots) {
+      if (spot.x > maxX) maxX = spot.x;
+    }
 
     final xRange = (maxX - minX).abs();
     final bottomStep = xRange <= 60
@@ -220,158 +258,42 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
               ),
             ),
           ),
-          lineBarsData: [
-            LineChartBarData(
-              spots: spots,
-              isCurved: true,
-              barWidth: 2,
-              color: lineColor,
-              dotData: const FlDotData(show: false),
-              belowBarData: BarAreaData(show: false),
-            ),
-          ],
+          lineBarsData: bars,
         ),
       ),
     );
   }
 
-  Widget _depthStatsCard(List<List<dynamic>> rows) {
-    final stats = _calcDepthStats(rows);
+  Widget _buildChart() {
+    final bars = <LineChartBarData>[];
 
-    if (stats == null) {
-      return Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
-        ),
-        child: const Text(
-          "No bathymetry stats available",
-          style: TextStyle(
-            fontSize: 12,
-            color: Color(0xFF6B7280),
-            fontWeight: FontWeight.w600,
-          ),
+    for (int i = 0; i < widget.scans.length; i++) {
+      final spots = _makeDepthSpots(widget.scans[i].bathymetryRows);
+      if (spots.isEmpty) continue;
+
+      bars.add(
+        LineChartBarData(
+          spots: spots,
+          isCurved: true,
+          barWidth: 2,
+          color: _colors[i % _colors.length],
+          dotData: const FlDotData(show: false),
+          belowBarData: BarAreaData(show: false),
         ),
       );
     }
-
-    Widget oneStat(String label, double value) {
-      return Expanded(
-        child: Column(
-          children: [
-            Text(
-              value.toStringAsFixed(1),
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '$label (cm)',
-              style: const TextStyle(
-                fontSize: 12,
-                color: Color(0xFF6B7280),
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: Row(
-        children: [
-          oneStat('Avg', stats['avg']!),
-          oneStat('Min', stats['min']!),
-          oneStat('Max', stats['max']!),
-        ],
-      ),
-    );
-  }
-
-  Widget _depthChart(List<List<dynamic>> rows) {
-    final spots = _makeDepthSpots(rows);
 
     return _chartBox(
-      spots: spots,
+      bars: bars,
       emptyText: "No bathymetry chart data",
       xLabel: "Scan Duration (mm:ss)",
       yLabel: "Depth (cm)",
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final bathymetryRows = widget.scan.bathymetryRows;
+  Widget _topStats() {
+    final change = _calcChange();
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F6FA),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        centerTitle: true,
-        leading: IconButton(
-          icon: const Icon(Ionicons.chevron_back_outline),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: const Text(
-          "Scan Analysis",
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Ionicons.share_outline),
-            onPressed: () {},
-          ),
-        ],
-        shape: const Border(
-          bottom: BorderSide(color: Color(0xFFE5E7EB), width: 1),
-        ),
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          _scanInfoCard(),
-          const SizedBox(height: 14),
-          const Text(
-            "Depth Data",
-            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
-          ),
-          const SizedBox(height: 10),
-          _depthStatsCard(bathymetryRows),
-          const SizedBox(height: 14),
-          _sectionCard(
-            title: "Bathymetry Data",
-            subtitle: "Bathymetry depth over scan time",
-            child: _depthChart(bathymetryRows),
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: const [
-              Text(
-                "Notes",
-                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
-              ),
-              Spacer(),
-              Icon(Ionicons.menu_outline, size: 18),
-            ],
-          ),
-          const SizedBox(height: 10),
-          _notesBox(),
-          const SizedBox(height: 30),
-        ],
-      ),
-    );
-  }
-
-  Widget _scanInfoCard() {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -380,33 +302,68 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _infoLine("Scan Name", widget.scan.title),
-          _infoLine("Date, Time", widget.scan.time),
-          _infoLine("Duration", widget.scan.duration),
-        ],
-      ),
-    );
-  }
-
-  Widget _infoLine(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        children: [
-          Text(
-            label,
-            style: const TextStyle(
-              color: Color(0xFF6B7280),
+          const Text(
+            "Depth Change",
+            style: TextStyle(
               fontSize: 12,
+              color: Color(0xFF6B7280),
               fontWeight: FontWeight.w600,
             ),
           ),
-          const Spacer(),
+          const SizedBox(height: 8),
           Text(
-            value,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+            change != null ? "${change.toStringAsFixed(2)} cm" : "—",
+            style: const TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF111827),
+            ),
           ),
+          const SizedBox(height: 12),
+          ...widget.scans.asMap().entries.map((entry) {
+            final i = entry.key;
+            final scan = entry.value;
+            final settled = _calcSettledDepth(scan.bathymetryRows);
+            final color = _colors[i % _colors.length];
+
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: i == widget.scans.length - 1 ? 0 : 10,
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: color,
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      scan.title,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF374151),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    settled != null ? "${settled.toStringAsFixed(2)} cm" : "—",
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
         ],
       ),
     );
@@ -471,6 +428,66 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
             },
             child: const Text("Save Note"),
           ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F6FA),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        centerTitle: true,
+        leading: IconButton(
+          icon: const Icon(Ionicons.chevron_back_outline),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: const Text(
+          "Scan Analysis",
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Ionicons.share_outline),
+            onPressed: () {},
+          ),
+        ],
+        shape: const Border(
+          bottom: BorderSide(color: Color(0xFFE5E7EB), width: 1),
+        ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const Text(
+            "Depth Data",
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
+          ),
+          const SizedBox(height: 10),
+          _topStats(),
+          const SizedBox(height: 14),
+          _sectionCard(
+            title: "Bathymetry Data",
+            subtitle: "Bathymetry depth over scan time",
+            child: _buildChart(),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: const [
+              Text(
+                "Notes",
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
+              ),
+              Spacer(),
+              Icon(Ionicons.menu_outline, size: 18),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _notesBox(),
+          const SizedBox(height: 30),
         ],
       ),
     );
