@@ -13,6 +13,8 @@ class CompareScansPage extends StatefulWidget {
 }
 
 class _CompareScansPageState extends State<CompareScansPage> {
+  final ScrollController _scrollCtrl = ScrollController();
+
   final List<Color> _colors = const [
     Color(0xFF1F77B4),
     Color(0xFFFF7F0E),
@@ -20,6 +22,12 @@ class _CompareScansPageState extends State<CompareScansPage> {
     Color(0xFFD62728),
     Color(0xFF9467BD),
   ];
+
+  @override
+  void dispose() {
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
 
   double? _toDouble(dynamic value) {
     if (value is num) return value.toDouble();
@@ -81,7 +89,7 @@ class _CompareScansPageState extends State<CompareScansPage> {
     return high - low;
   }
 
-  List<FlSpot> _makeDepthSpots(List<List<dynamic>> rows) {
+  List<FlSpot> _graphSpots(List<List<dynamic>> rows) {
     final validRows = rows.where((row) => row.length >= 5).toList();
     if (validRows.isEmpty) return [];
 
@@ -102,29 +110,16 @@ class _CompareScansPageState extends State<CompareScansPage> {
     points.sort((a, b) => a.x.compareTo(b.x));
 
     final firstTime = points.first.x;
-    final fixedPoints = points
+    return points
         .map((point) => FlSpot((point.x - firstTime) / 1000.0, -point.y))
         .toList();
-
-    return fixedPoints;
   }
 
-  Widget _leftAxisText(double value, TitleMeta meta) {
-    if (meta.min == value || meta.max == value) {
+  Widget _xTick(double value, TitleMeta meta) {
+    if ((value - meta.min).abs() < 0.01) {
       return const SizedBox.shrink();
     }
 
-    return Text(
-      (-value).toStringAsFixed(0),
-      style: const TextStyle(
-        fontSize: 11,
-        color: Color(0xFF6B7280),
-        fontWeight: FontWeight.w600,
-      ),
-    );
-  }
-
-  Widget _bottomAxisText(double value, TitleMeta meta) {
     return SideTitleWidget(
       meta: meta,
       child: Text(
@@ -138,90 +133,34 @@ class _CompareScansPageState extends State<CompareScansPage> {
     );
   }
 
-  Widget _chartBox({
-    required List<LineChartBarData> bars,
-    required String emptyText,
-    required String xLabel,
+  Widget _fixedYAxis({
+    required double minY,
+    required double maxY,
+    required double interval,
     required String yLabel,
+    required double graphHeight,
   }) {
-    if (bars.isEmpty) {
-      return SizedBox(height: 260, child: Center(child: Text(emptyText)));
+    final labels = <double>[];
+
+    double current = (minY / interval).ceil() * interval;
+
+    while (current <= maxY + 0.0001) {
+      labels.add(current);
+      current += interval;
     }
-
-    final allSpots = bars.expand((b) => b.spots).toList();
-
-    double lowY = allSpots.first.y;
-    double highY = allSpots.first.y;
-
-    for (final spot in allSpots) {
-      if (spot.y < lowY) lowY = spot.y;
-      if (spot.y > highY) highY = spot.y;
-    }
-
-    final range = (highY - lowY).abs();
-    final extraSpace = range < 0.01 ? 1.0 : range * 0.08;
-
-    final minX = 0.0;
-    double maxX = 1.0;
-    for (final spot in allSpots) {
-      if (spot.x > maxX) maxX = spot.x;
-    }
-
-    final xRange = (maxX - minX).abs();
-    final bottomStep = xRange <= 60
-        ? 10.0
-        : xRange <= 180
-        ? 30.0
-        : 60.0;
-
-    const leftStep = 10.0;
 
     return SizedBox(
-      height: 260,
-      child: LineChart(
-        LineChartData(
-          minX: minX,
-          maxX: maxX,
-          minY: lowY - extraSpace,
-          maxY: highY + extraSpace,
-          gridData: FlGridData(
-            show: true,
-            drawVerticalLine: true,
-            verticalInterval: bottomStep,
-            horizontalInterval: leftStep,
-            getDrawingHorizontalLine: (value) {
-              return const FlLine(
-                color: Color(0xFFD1D5DB),
-                strokeWidth: 1,
-                dashArray: [6, 4],
-              );
-            },
-            getDrawingVerticalLine: (value) {
-              return const FlLine(
-                color: Color(0xFFD1D5DB),
-                strokeWidth: 1,
-                dashArray: [6, 4],
-              );
-            },
-          ),
-          borderData: FlBorderData(
-            show: true,
-            border: Border.all(color: const Color(0xFFD1D5DB)),
-          ),
-          titlesData: FlTitlesData(
-            topTitles: const AxisTitles(
-              sideTitles: SideTitles(showTitles: false),
-            ),
-            rightTitles: const AxisTitles(
-              sideTitles: SideTitles(showTitles: false),
-            ),
-            leftTitles: AxisTitles(
-              axisNameSize: 30,
-              axisNameWidget: Padding(
-                padding: const EdgeInsets.only(bottom: 8),
+      width: 52,
+      height: graphHeight,
+      child: Row(
+        children: [
+          SizedBox(
+            width: 20,
+            child: Center(
+              child: RotatedBox(
+                quarterTurns: 3,
                 child: Text(
                   yLabel,
-                  textAlign: TextAlign.center,
                   style: const TextStyle(
                     fontSize: 12,
                     color: Color(0xFF6B7280),
@@ -229,37 +168,199 @@ class _CompareScansPageState extends State<CompareScansPage> {
                   ),
                 ),
               ),
-              sideTitles: SideTitles(
-                showTitles: true,
-                reservedSize: 44,
-                interval: leftStep,
-                getTitlesWidget: _leftAxisText,
-              ),
-            ),
-            bottomTitles: AxisTitles(
-              axisNameSize: 30,
-              axisNameWidget: Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  xLabel,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: Color(0xFF6B7280),
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              sideTitles: SideTitles(
-                showTitles: true,
-                reservedSize: 30,
-                interval: bottomStep,
-                getTitlesWidget: _bottomAxisText,
-              ),
             ),
           ),
-          lineBarsData: bars,
-        ),
+          Expanded(
+            child: Stack(
+              children: labels.map((value) {
+                final ratio = (value - minY) / (maxY - minY);
+                double top = graphHeight - (ratio * graphHeight) - 8;
+
+                if (top < 0) top = 0;
+                if (top > graphHeight - 16) top = graphHeight - 16;
+
+                return Positioned(
+                  right: 4,
+                  top: top,
+                  child: Text(
+                    (-value).toStringAsFixed(0),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF6B7280),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _graphWrap({
+    required List<LineChartBarData> bars,
+    required String emptyText,
+    required String xLabel,
+    required String yLabel,
+  }) {
+    if (bars.isEmpty) {
+      return SizedBox(height: 320, child: Center(child: Text(emptyText)));
+    }
+
+    final graphSpots = bars.expand((b) => b.spots).toList();
+
+    double lowY = graphSpots.first.y;
+    double highY = graphSpots.first.y;
+
+    for (final spot in graphSpots) {
+      if (spot.y < lowY) lowY = spot.y;
+      if (spot.y > highY) highY = spot.y;
+    }
+
+    final range = (highY - lowY).abs();
+    final extraSpace = range < 0.01 ? 1.0 : range * 0.08;
+
+    final minY = lowY - extraSpace;
+    final maxY = highY + extraSpace;
+
+    final minX = 0.0;
+    double maxX = 1.0;
+    for (final spot in graphSpots) {
+      if (spot.x > maxX) maxX = spot.x;
+    }
+
+    final xRange = (maxX - minX).abs();
+
+    final bottomStep = xRange <= 60
+        ? 10.0
+        : xRange <= 180
+        ? 30.0
+        : xRange <= 600
+        ? 60.0
+        : 120.0;
+
+    const leftStep = 10.0;
+    const graphHeight = 260.0;
+
+    return SizedBox(
+      height: 320,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          const beforeScroll = 300.0;
+          final baseWidth = constraints.maxWidth - 52;
+          final seenWidth = baseWidth < 220 ? 220.0 : baseWidth;
+
+          double fullWidth = seenWidth;
+          if (xRange > beforeScroll) {
+            fullWidth = seenWidth * (xRange / beforeScroll);
+          }
+
+          if (fullWidth < seenWidth) {
+            fullWidth = seenWidth;
+          }
+
+          return Column(
+            children: [
+              Expanded(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _fixedYAxis(
+                      minY: minY,
+                      maxY: maxY,
+                      interval: leftStep,
+                      yLabel: yLabel,
+                      graphHeight: graphHeight,
+                    ),
+                    Expanded(
+                      child: RawScrollbar(
+                        controller: _scrollCtrl,
+                        thumbVisibility: true,
+                        trackVisibility: true,
+                        thickness: 8,
+                        radius: const Radius.circular(10),
+                        scrollbarOrientation: ScrollbarOrientation.bottom,
+                        child: SingleChildScrollView(
+                          controller: _scrollCtrl,
+                          scrollDirection: Axis.horizontal,
+                          child: SizedBox(
+                            width: fullWidth,
+                            height: graphHeight,
+                            child: LineChart(
+                              LineChartData(
+                                minX: minX,
+                                maxX: maxX,
+                                minY: minY,
+                                maxY: maxY,
+                                gridData: FlGridData(
+                                  show: true,
+                                  drawVerticalLine: true,
+                                  verticalInterval: bottomStep,
+                                  horizontalInterval: leftStep,
+                                  getDrawingHorizontalLine: (value) {
+                                    return const FlLine(
+                                      color: Color(0xFFD1D5DB),
+                                      strokeWidth: 1,
+                                      dashArray: [6, 4],
+                                    );
+                                  },
+                                  getDrawingVerticalLine: (value) {
+                                    return const FlLine(
+                                      color: Color(0xFFD1D5DB),
+                                      strokeWidth: 1,
+                                      dashArray: [6, 4],
+                                    );
+                                  },
+                                ),
+                                borderData: FlBorderData(
+                                  show: true,
+                                  border: Border.all(
+                                    color: const Color(0xFFD1D5DB),
+                                  ),
+                                ),
+                                titlesData: FlTitlesData(
+                                  topTitles: const AxisTitles(
+                                    sideTitles: SideTitles(showTitles: false),
+                                  ),
+                                  rightTitles: const AxisTitles(
+                                    sideTitles: SideTitles(showTitles: false),
+                                  ),
+                                  leftTitles: const AxisTitles(
+                                    sideTitles: SideTitles(showTitles: false),
+                                  ),
+                                  bottomTitles: AxisTitles(
+                                    sideTitles: SideTitles(
+                                      showTitles: true,
+                                      reservedSize: 30,
+                                      interval: bottomStep,
+                                      getTitlesWidget: _xTick,
+                                    ),
+                                  ),
+                                ),
+                                lineBarsData: bars,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                xLabel,
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: Color(0xFF6B7280),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -268,7 +369,7 @@ class _CompareScansPageState extends State<CompareScansPage> {
     final bars = <LineChartBarData>[];
 
     for (int i = 0; i < widget.scans.length; i++) {
-      final spots = _makeDepthSpots(widget.scans[i].bathymetryRows);
+      final spots = _graphSpots(widget.scans[i].bathymetryRows);
       if (spots.isEmpty) continue;
 
       bars.add(
@@ -283,7 +384,7 @@ class _CompareScansPageState extends State<CompareScansPage> {
       );
     }
 
-    return _chartBox(
+    return _graphWrap(
       bars: bars,
       emptyText: "No bathymetry chart data",
       xLabel: "Scan Duration (mm:ss)",

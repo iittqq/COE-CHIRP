@@ -5,7 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 
 Future<void> importScanZip() async {
-  final result = await FilePicker.platform.pickFiles(
+  final result = await FilePicker.pickFiles(
     type: FileType.custom,
     allowedExtensions: ['zip'],
   );

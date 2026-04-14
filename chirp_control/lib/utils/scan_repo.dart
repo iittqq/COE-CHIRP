@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
@@ -101,6 +102,50 @@ class ScanRepository {
     return seconds < 0 ? 0 : seconds;
   }
 
+  static Future<Map<String, dynamic>> _readMetadata(Directory folder) async {
+    final file = File('${folder.path}/metadata.json');
+
+    if (!await file.exists()) {
+      return {};
+    }
+
+    try {
+      final raw = await file.readAsString();
+      final decoded = jsonDecode(raw);
+
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+    } catch (_) {}
+
+    return {};
+  }
+
+  static Future<void> _writeMetadata(
+    Directory folder,
+    Map<String, dynamic> updates,
+  ) async {
+    final file = File('${folder.path}/metadata.json');
+
+    Map<String, dynamic> current = {};
+
+    if (await file.exists()) {
+      try {
+        final raw = await file.readAsString();
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) {
+          current = decoded;
+        }
+      } catch (_) {}
+    }
+
+    current.addAll(updates);
+
+    await file.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(current),
+    );
+  }
+
   static Future<List<ScanData>> loadScans() async {
     final appDir = await getApplicationDocumentsDirectory();
     final scansDir = Directory('${appDir.path}/scans');
@@ -127,13 +172,15 @@ class ScanRepository {
 
       if (await sonarFile.exists()) {
         final content = await sonarFile.readAsString();
-        sonarRows = CsvToListConverter().convert(content, eol: '\n');
+        sonarRows = const CsvDecoder().convert(content);
       }
 
       if (await bathyFile.exists()) {
         final content = await bathyFile.readAsString();
-        bathymetryRows = CsvToListConverter().convert(content, eol: '\n');
+        bathymetryRows = const CsvDecoder().convert(content);
       }
+
+      final metadata = await _readMetadata(folder);
 
       final firstTimestamp = _extractFirstTimestamp(sonarRows, bathymetryRows);
       final durationSeconds = _extractDurationSeconds(
@@ -147,14 +194,19 @@ class ScanRepository {
 
       final formattedDuration = _formatDurationFromSeconds(durationSeconds);
 
+      final savedTitle = (metadata['title'] ?? '').toString().trim();
+      final savedLocation = (metadata['location'] ?? '').toString().trim();
+
       scans.add(
         ScanData(
           folderName: folderName,
           folder: folder,
           sonarRows: sonarRows,
           bathymetryRows: bathymetryRows,
-          title: folderName.replaceAll('_', ' '),
-          location: 'SITE A',
+          title: savedTitle.isNotEmpty
+              ? savedTitle
+              : folderName.replaceAll('_', ' '),
+          location: savedLocation.isNotEmpty ? savedLocation : 'SITE A',
           time: formattedTime,
           duration: formattedDuration,
         ),
@@ -162,6 +214,14 @@ class ScanRepository {
     }
 
     return scans;
+  }
+
+  static Future<void> renameScan(ScanData scan, String newTitle) async {
+    final trimmed = newTitle.trim();
+
+    if (trimmed.isEmpty) return;
+
+    await _writeMetadata(scan.folder, {'title': trimmed});
   }
 
   static Future<void> deleteScan(ScanData scan) async {

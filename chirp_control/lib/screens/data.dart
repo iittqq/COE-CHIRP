@@ -18,6 +18,7 @@ class _HistoryPageState extends State<HistoryPage> {
 
   late Future<List<ScanData>> futureScans;
   List<ScanData> allScans = [];
+  String searchText = '';
 
   @override
   void initState() {
@@ -78,6 +79,62 @@ class _HistoryPageState extends State<HistoryPage> {
     );
   }
 
+  Future<void> editSelectedScan() async {
+    if (picked.length != 1) return;
+
+    final index = picked.first;
+    final scan = allScans[index];
+    final controller = TextEditingController(text: scan.title);
+
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename Scan'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'Enter new scan name',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (newName == null || newName.isEmpty) return;
+
+    try {
+      await ScanRepository.renameScan(scan, newName);
+
+      setState(() {
+        picked.clear();
+        selecting = false;
+      });
+
+      reloadScans();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Scan renamed successfully')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Rename failed: $e')));
+    }
+  }
+
   Future<void> deleteScan() async {
     if (picked.isEmpty) return;
 
@@ -85,7 +142,9 @@ class _HistoryPageState extends State<HistoryPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete scans?'),
-        content: Text('Are you sure you want to delete selected scan(s)?'),
+        content: const Text(
+          'Are you sure you want to delete selected scan(s)?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -155,15 +214,15 @@ class _HistoryPageState extends State<HistoryPage> {
         shape: const Border(
           bottom: BorderSide(color: Color(0xFFE5E7EB), width: 1),
         ),
+        leading: IconButton(
+          onPressed: importScan,
+          icon: const Icon(Icons.upload_file, color: Color(0xFF2563EB)),
+        ),
         title: Text(
           selecting ? "${picked.length} Selected" : "PAST SCANS HISTORY",
           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
         ),
         actions: [
-          IconButton(
-            onPressed: importScan,
-            icon: const Icon(Icons.upload_file, color: Color(0xFF2563EB)),
-          ),
           TextButton(
             onPressed: toggleSelect,
             child: Text(
@@ -192,9 +251,14 @@ class _HistoryPageState extends State<HistoryPage> {
                   const SizedBox(width: 15),
                   const Icon(Ionicons.search_outline, color: Color(0xFF9CA3AF)),
                   const SizedBox(width: 15),
-                  const Expanded(
+                  Expanded(
                     child: TextField(
-                      decoration: InputDecoration(
+                      onChanged: (value) {
+                        setState(() {
+                          searchText = value;
+                        });
+                      },
+                      decoration: const InputDecoration(
                         hintText: "Search by date or location",
                         hintStyle: TextStyle(
                           color: Color(0xFF9CA3AF),
@@ -232,6 +296,16 @@ class _HistoryPageState extends State<HistoryPage> {
 
           allScans = snapshot.data ?? [];
 
+          final filtered = allScans.where((scan) {
+            final q = searchText.trim().toLowerCase();
+            if (q.isEmpty) return true;
+
+            return scan.title.toLowerCase().contains(q) ||
+                scan.location.toLowerCase().contains(q) ||
+                scan.time.toLowerCase().contains(q) ||
+                scan.duration.toLowerCase().contains(q);
+          }).toList();
+
           if (allScans.isEmpty) {
             return Center(
               child: Column(
@@ -253,9 +327,8 @@ class _HistoryPageState extends State<HistoryPage> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 120),
             children: [
               const SizedBox(height: 12),
-              ...allScans.asMap().entries.map((entry) {
-                final i = entry.key;
-                final scan = entry.value;
+              ...filtered.map((scan) {
+                final i = allScans.indexOf(scan);
 
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 12),
@@ -281,6 +354,26 @@ class _HistoryPageState extends State<HistoryPage> {
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                 child: Row(
                   children: [
+                    SizedBox(
+                      height: 52,
+                      width: 60,
+                      child: ElevatedButton(
+                        onPressed: picked.length == 1 ? editSelectedScan : null,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF6B7280),
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          padding: EdgeInsets.zero,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          disabledBackgroundColor: const Color(0xFFE5E7EB),
+                          disabledForegroundColor: const Color(0xFF9CA3AF),
+                        ),
+                        child: const Icon(Icons.edit_outlined),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
                     Expanded(
                       child: SizedBox(
                         height: 52,
@@ -441,6 +534,7 @@ class _ScanCard extends StatelessWidget {
                             color: Color(0xFF9CA3AF),
                           ),
                         ),
+                        const Spacer(),
                       ],
                     ),
                   ],
