@@ -1,0 +1,84 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+migrate_working_copy/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configurations and settings for VS Code users.
+# You may wish to check this in to share your settings with your team.
+# .vscode/
+
+# Flutter/Dart related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+/build/
+
+# Symbolication logging
+build/
+
+# Android related
+**/android/**/generated/
+**/android/gen/
+**/android/gradlew
+**/android/gradlew.bat
+**/android/local.properties
+**/android/key.properties
+**/android/app/google-services.json
+.gradle/
+captures/
+
+# iOS/macOS related
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/ServiceDefinitions.json
+**/ios/Runner/GeneratedPluginRegistrant.[mh]
+**/ios/Runner/GeneratedPluginRegistrant.swift
+**/macos/Flutter/GeneratedPluginRegistrant.swift
+**/macos/Flutter/ephemeral/
+**/ios/.generated/
+*.xcworkspace
+/*/Podfile.lock
+/*/Pods/
+/*/ServiceDefinitions.json
+
+# Web related
+.web_assets/
+
+# Windows related
+**/windows/flutter/ephemeral/
+**/windows/flutter/generated_plugin_registrant.h
+**/windows/flutter/generated_plugin_registrant.cc
+
+# Linux related
+**/linux/flutter/ephemeral/
+**/linux/flutter/generated_plugin_registrant.h
+**/linux/flutter/generated_plugin_registrant.cc
+
+# Executables
+*.exe
+*.dll
+*.so
+*.dylib
+
+
+FishDeeperCsvLogs/
+data_visualization/*.png
+**/*.xml

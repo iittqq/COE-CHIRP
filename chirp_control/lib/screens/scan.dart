@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:xml/xml.dart';
 import 'package:chirp_control/components/scan_duration_input.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import '../components/system_status_card.dart';
 
 enum WebSocketConnectionStatus { disconnected, connecting, connected }
 
@@ -15,9 +16,12 @@ enum AutoState {
   idle,
   switchingOn,
   adjustingShade,
-  runningAutomation,
+  performingScan,
+  uploadingScan,
   switchingOff,
 }
+
+enum PerformScan { boat }
 
 class DeviceControlPage extends StatefulWidget {
   const DeviceControlPage({super.key});
@@ -27,6 +31,8 @@ class DeviceControlPage extends StatefulWidget {
 }
 
 class _DeviceControlPageState extends State<DeviceControlPage> {
+  String _activeSiteName = "";
+  Key _statusCardKey = UniqueKey();
   late WebSocketService ws;
   WebSocketConnectionStatus _connectionStatus =
       WebSocketConnectionStatus.disconnected;
@@ -74,10 +80,7 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
   };
 
   void _attemptConnection() {
-    _reconnectTimer?.cancel();
-
     setState(() => _connectionStatus = WebSocketConnectionStatus.connecting);
-
     _uiSubscription?.cancel();
 
     ws
@@ -85,50 +88,93 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
         .then((_) {
           if (!mounted) return;
 
-          print("Socket connected successfully ✅");
-          setState(() {
-            _connectionStatus = WebSocketConnectionStatus.connected;
-            isConnected = true;
+          _uiSubscription = ws.messages.listen((data) {
+            if (automationRunning) {
+              if (data.containsKey("ui_state_zip_b64") ||
+                  data.toString().contains("ui_state_zip_b64")) {
+                String? b64;
+                if (data["ui_state_zip_b64"] != null) {
+                  b64 = data["ui_state_zip_b64"];
+                } else if (data.containsKey("body")) {
+                  try {
+                    final body = json.decode(data["body"]);
+                    b64 = body["ui_state_zip_b64"];
+                  } catch (_) {}
+                }
+
+                if (b64 != null) {
+                  analyzeUiXml(decodeZippedXml(b64));
+                }
+              }
+              return;
+            }
+
+            if (_connectionStatus == WebSocketConnectionStatus.connecting) {
+              if (_checkDataForSuccess(data)) {
+                debugPrint("Phone confirmed ONLINE ✅");
+                setState(() {
+                  _connectionStatus = WebSocketConnectionStatus.connected;
+                  _statusCardKey = UniqueKey();
+                });
+              }
+            }
           });
 
-          _uiSubscription = ws.messages.listen(
-            (data) {
-              if (data is Map && data.containsKey("ui_state_zip_b64")) {
-                final xml = decodeZippedXml(data["ui_state_zip_b64"]);
-                setState(() => uiState = xml);
-                analyzeUiXml(xml);
-              }
-            },
-            onError: (error) {
-              print("Stream Error: $error");
-              _handleDisconnection();
-            },
-            onDone: () {
-              print("Stream Done (Disconnected)");
-              _handleDisconnection();
-            },
-            cancelOnError: true,
-          );
+          _sendPing();
         })
-        .catchError((e) {
-          print("Socket connection failed: $e");
-          _handleDisconnection();
-        });
+        .catchError((e) => _handleDisconnection());
+  }
+
+  bool _checkDataForSuccess(dynamic data) {
+    if (data is! Map) return false;
+
+    Map<String, dynamic> responseData;
+
+    if (data.containsKey("body") && data["body"] is String) {
+      try {
+        responseData = json.decode(data["body"]).cast<String, dynamic>();
+      } catch (e) {
+        debugPrint("Error parsing body string: $e");
+        return false;
+      }
+    } else {
+      responseData = data.cast<String, dynamic>();
+    }
+
+    final String? status = responseData["status"];
+    final String? action = responseData["action"];
+
+    if (status == "online" || action == "checkOnline") {
+      return true;
+    }
+
+    return false;
+  }
+
+  void _sendPing() {
+    if (automationRunning || selectedDevice == null) {
+      print("Ping suppressed: Automation is currently running.");
+      return;
+    }
+
+    setState(() {
+      _connectionStatus = WebSocketConnectionStatus.connecting;
+    });
+
+    ws.sendCommand({
+      "action": "checkOnline",
+      "deviceId": getSelectedDeviceId(),
+      "sender": deviceId,
+    });
   }
 
   void _handleDisconnection() {
     if (!mounted) return;
-
-    setState(() {
-      _connectionStatus = WebSocketConnectionStatus.disconnected; // Show RED
-      isConnected = false;
-    });
+    setState(() => _connectionStatus = WebSocketConnectionStatus.disconnected);
 
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(const Duration(seconds: 5), () {
-      if (mounted) {
-        _attemptConnection();
-      }
+      if (mounted) _attemptConnection();
     });
   }
 
@@ -137,29 +183,6 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     super.initState();
     _reconnectTimer?.cancel();
     ws = WebSocketService(deviceId: deviceId);
-    _attemptConnection();
-  }
-
-  Color _getStatusColor() {
-    switch (_connectionStatus) {
-      case WebSocketConnectionStatus.connected:
-        return Colors.green;
-      case WebSocketConnectionStatus.connecting:
-        return Colors.orange;
-      case WebSocketConnectionStatus.disconnected:
-        return Colors.red;
-    }
-  }
-
-  String _getStatusText() {
-    switch (_connectionStatus) {
-      case WebSocketConnectionStatus.connected:
-        return "Ready";
-      case WebSocketConnectionStatus.connecting:
-        return "Reconnecting...";
-      case WebSocketConnectionStatus.disconnected:
-        return "Connection Lost";
-    }
   }
 
   @override
@@ -198,10 +221,12 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
         timer.cancel();
         setState(() {
           _readyToFinishScan = true;
+          _currentState = AutoState.uploadingScan;
           print("Automation timer finished. Ready to open menu.");
 
           ws.sendCommand({
-            "action": "restart",
+            "action": "wifi",
+            "state": "off",
             "deviceId": getSelectedDeviceId(),
             "sender": deviceId,
           });
@@ -214,95 +239,11 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     });
   }
 
-  XmlElement? _findClickableAncestor(XmlElement node) {
-    XmlElement? current = node;
-
-    while (current != null) {
-      final clickable = current.getAttribute('clickable');
-      if (clickable == 'true') {
-        return current;
-      }
-      final parent = current.parent;
-      if (parent is XmlElement) {
-        current = parent;
-      } else {
-        break;
-      }
-    }
-    return null;
-  }
-
-  void _clickElementSmart(
-    XmlDocument doc, {
-    String? text,
-    String? contentDesc,
-    String? resourceId,
-  }) {
-    final nodes = doc.findAllElements('node');
-
-    for (final node in nodes) {
-      bool matches = false;
-
-      if (text != null && node.getAttribute('text') == text) {
-        matches = true;
-      } else if (contentDesc != null &&
-          node.getAttribute('content-desc') == contentDesc) {
-        matches = true;
-      } else if (resourceId != null &&
-          node.getAttribute('resource-id') == resourceId) {
-        matches = true;
-      }
-
-      if (matches) {
-        if (node.getAttribute('clickable') == 'true') {
-          _clickByXmlNode(node);
-          return;
-        }
-
-        final clickableParent = _findClickableAncestor(node);
-        if (clickableParent != null) {
-          print("Found clickable parent for target element");
-          _clickByXmlNode(clickableParent);
-          return;
-        }
-
-        print("No clickable parent found, clicking target node directly");
-        _clickByXmlNode(node);
-        return;
-      }
-    }
-
-    print("Element not found: text=$text, desc=$contentDesc, id=$resourceId");
-  }
-
-  bool _hasFabImageDescendant(XmlElement xmlNode, String contentDescription) {
-    for (final child in xmlNode.children.whereType<XmlElement>()) {
-      String contentDescAttr = child.getAttribute('content-desc') ?? '';
-      String contentDesc = contentDescAttr.trim();
-
-      if (contentDesc == contentDescription) {
-        return true;
-      }
-
-      if (_hasFabImageDescendant(child, contentDescription)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   void analyzeUiXml(String xml) {
     final doc = XmlDocument.parse(xml);
 
     if (_xmlUpdateCompleter != null && !_xmlUpdateCompleter!.isCompleted) {
       _xmlUpdateCompleter!.complete(doc);
-    }
-
-    if (xml.contains("Select Device Model") ||
-        xml.contains('content-desc="CANCEL"')) {
-      print("Detected 'Select Device' screen. Dismissing...");
-      _dismissDeviceSelect();
-      return;
     }
 
     switch (_currentState) {
@@ -311,11 +252,15 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
         break;
 
       case AutoState.adjustingShade:
-        _handleShadeToggle(doc);
+        _handleShadeToggle(doc, xml);
         break;
 
-      case AutoState.runningAutomation:
+      case AutoState.performingScan:
         _handleFishDeeperAutomation(doc);
+        break;
+
+      case AutoState.uploadingScan:
+        _handleUploadScan(doc);
         break;
 
       case AutoState.switchingOff:
@@ -327,80 +272,103 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     }
   }
 
-  XmlElement? _findRiseHandle(XmlDocument doc) {
-    try {
-      return doc
-          .findAllElements('node')
-          .firstWhere(
-            (n) =>
-                n.getAttribute('class') == 'android.widget.ImageView' &&
-                n.getAttribute('index') == '3' &&
-                n.getAttribute('package') == 'com.wazombi.RISE',
-          );
-    } catch (e) {
-      print("Handle not found in XML.");
-      return null;
+  void _handleTuyaToggle(XmlDocument doc, {required AutoState nextState}) {
+    final switchBtn = doc
+        .findAllElements('node')
+        .firstWhere(
+          (n) =>
+              n.getAttribute('resource-id') == 'com.tuya.smart:id/switchButton',
+          orElse: () => XmlElement(XmlName('null')),
+        );
+
+    if (switchBtn.name.local != 'null') {
+      print("Found Tuya Switch. Toggling and moving to $nextState");
+      _clickByXmlNode(switchBtn);
+
+      setState(() => _currentState = nextState);
+
+      Future.delayed(const Duration(seconds: 20), () {
+        if (nextState == AutoState.adjustingShade) {
+          _launchShades();
+        } else {
+          _closeApp(packageName: "com.tuya.smart");
+
+          Future.delayed(const Duration(seconds: 10), () {
+            _closeApp(packageName: "eu.deeper.fishdeeper");
+          });
+
+          Future.delayed(const Duration(seconds: 20), () {
+            _closeApp(
+              packageName:
+                  "com.wazombi.RISE/crc64c90e479072a4489e.DrawerMainActivity",
+            );
+          });
+
+          Future.delayed(const Duration(seconds: 30), () {
+            ws.sendCommand({
+              "action": "wifi",
+              "state": "on",
+              "deviceId": getSelectedDeviceId(),
+              "sender": deviceId,
+            });
+          });
+
+          setState(() {
+            automationRunning = false;
+            _isSynced = false;
+            _currentState = AutoState.idle;
+            _statusCardKey = UniqueKey();
+          });
+          print("Sequence Complete.");
+        }
+      });
     }
   }
 
-  bool _isShadeSequenceRunning = false;
-
-  Future<void> _handleShadeToggle(XmlDocument initialDoc) async {
-    if (_currentState != AutoState.adjustingShade || _isShadeSequenceRunning)
-      return;
-
-    _isShadeSequenceRunning = true;
-    print("--- Starting Shade Swipe Sequence ---");
+  XmlElement? _findRiseHandle(XmlDocument doc, String rawXML) {
+    if (rawXML.contains("Select Device Model") ||
+        rawXML.contains('content-desc="CANCEL"')) {
+      print("Detected 'Select Device' screen. Dismissing...");
+      _dismissDeviceSelect();
+      return null;
+    }
 
     try {
-      final dragHandle = _findRiseHandle(initialDoc);
-      if (dragHandle == null) {
-        print("Handle not found in initial XML.");
-        _isShadeSequenceRunning = false;
-        return;
-      }
+      final nodes = doc.findAllElements('node').toList();
 
-      print("Step 1: Swiping DOWN to bottom.");
-      _sendSwipeCommand(dragHandle, endX: 360, endY: 1500);
+      for (var node in nodes) {
+        final String bounds = node.getAttribute('bounds') ?? "";
+        final String pkg = node.getAttribute('package') ?? "";
 
-      _xmlUpdateCompleter = Completer<XmlDocument>();
+        if (pkg != 'com.wazombi.RISE') continue;
 
-      await Future.delayed(const Duration(seconds: 11));
+        final match = RegExp(
+          r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]",
+        ).firstMatch(bounds);
+        if (match != null) {
+          int top = int.parse(match.group(2)!);
 
-      final middleDoc = await _xmlUpdateCompleter!.future.timeout(
-        const Duration(seconds: 12),
-        onTimeout: () => initialDoc, // Fallback to avoid hanging
-      );
+          if (top < 300) continue;
 
-      final movedHandle = _findRiseHandle(middleDoc);
-      if (movedHandle != null) {
-        print("Step 2: Swiping back UP to center.");
-        _sendSwipeCommand(movedHandle, endX: 360, endY: 600);
-
-        await Future.delayed(const Duration(seconds: 4));
-
-        print("Shade sequence complete. Transitioning to Fish Deeper.");
-        if (mounted) {
-          setState(() {
-            _currentState = AutoState.runningAutomation;
-            _isShadeSequenceRunning = false;
-          });
-          _launchFishDeeper();
+          final parent = node.parent;
+          if (parent is XmlElement &&
+              parent.getAttribute('resource-id') ==
+                  'com.wazombi.RISE:id/window_control') {
+            print("Target verified at Y: $top. Avoiding status bar.");
+            return node;
+          }
         }
-      } else {
-        print("Could not find handle at the bottom position.");
-        _isShadeSequenceRunning = false;
       }
     } catch (e) {
-      print("Error during shade sequence: $e");
-      _isShadeSequenceRunning = false;
+      print("Handle detection error: $e");
     }
+    return null;
   }
 
   void _dismissDeviceSelect() {
     ws.sendCommand({
-      "action": "clickBySelector",
-      "desc": "CANCEL", // Matches the content-desc in the XML
+      "action": "clickByXml",
+      "xmlNode": '<node content-desc="CANCEL" />',
       "deviceId": getSelectedDeviceId(),
       "sender": deviceId,
     });
@@ -423,38 +391,57 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     });
   }
 
-  void _handleTuyaToggle(XmlDocument doc, {required AutoState nextState}) {
-    final switchBtn = doc
-        .findAllElements('node')
-        .firstWhere(
-          (n) =>
-              n.getAttribute('resource-id') == 'com.tuya.smart:id/switchButton',
-          orElse: () => XmlElement(XmlName('null')),
-        );
+  bool _isShadeSequenceRunning = false;
 
-    if (switchBtn.name.local != 'null') {
-      print("Found Tuya Switch. Toggling and moving to $nextState");
-      _clickByXmlNode(switchBtn);
+  Future<void> _handleShadeToggle(XmlDocument doc, String rawXML) async {
+    if (_currentState != AutoState.adjustingShade || _isShadeSequenceRunning)
+      return;
 
-      setState(() => _currentState = nextState);
+    _isShadeSequenceRunning = true;
+    print("--- Starting Shade Swipe Sequence ---");
 
-      Future.delayed(const Duration(seconds: 2), () {
-        if (nextState == AutoState.adjustingShade) {
-          _launchShades();
-        } else {
-          _closeApp(packageName: "com.tuya.smart");
+    try {
+      final dragHandle = _findRiseHandle(doc, rawXML);
+      if (dragHandle == null) {
+        print("Handle not found in initial XML.");
+        _isShadeSequenceRunning = false;
+        return;
+      }
 
-          Future.delayed(const Duration(milliseconds: 500), () {
-            _closeApp(packageName: "eu.deeper.fishdeeper");
-          });
+      print("Step 1: Swiping DOWN to bottom.");
+      _sendSwipeCommand(dragHandle, endX: 360, endY: 1500);
+
+      _xmlUpdateCompleter = Completer<XmlDocument>();
+
+      await Future.delayed(const Duration(seconds: 11));
+
+      final middleDoc = await _xmlUpdateCompleter!.future.timeout(
+        const Duration(seconds: 12),
+        onTimeout: () => doc, // Fallback to avoid hanging
+      );
+
+      final movedHandle = _findRiseHandle(middleDoc, rawXML);
+      if (movedHandle != null) {
+        print("Step 2: Swiping back UP to center.");
+        _sendSwipeCommand(movedHandle, endX: 360, endY: 600);
+
+        await Future.delayed(const Duration(seconds: 4));
+
+        print("Shade sequence complete. Transitioning to Fish Deeper.");
+        if (mounted) {
           setState(() {
-            automationRunning = false;
-            _isSynced = false;
-            _currentState = AutoState.idle;
+            _currentState = AutoState.performingScan;
+            _isShadeSequenceRunning = false;
           });
-          print("Sequence Complete.");
+          _launchFishDeeper();
         }
-      });
+      } else {
+        print("Could not find handle at the bottom position.");
+        _isShadeSequenceRunning = false;
+      }
+    } catch (e) {
+      print("Error during shade sequence: $e");
+      _isShadeSequenceRunning = false;
     }
   }
 
@@ -473,143 +460,142 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     });
   }
 
+  bool clickedInitialConnect = false;
+
   void _handleFishDeeperAutomation(XmlDocument doc) {
-    final nodes = doc.findAllElements('node');
+    final nodes = doc.findAllElements('node').toList();
 
-    bool updateFound = false;
-    bool laterFound = false;
-    bool connectFound = false;
-    bool scanOptionsFound = false;
-    bool pauseFound = false;
-    bool resumeFound = false;
-    bool cancelFound = false;
-    bool boatScanIconFound = false;
-    bool openMenuFound = false;
-    bool navigateWithoutMapFound = false;
-    bool paused = false;
-    bool historyFound = false;
-    bool syncScansFound = false;
-    bool notConnectedFound = false;
-    String scanOptionsIndex = '';
-    String openMenuIndex = '';
-
-    _openMenuNode = null;
-
-    for (final node in nodes) {
-      final textAttr = node.getAttribute('text') ?? '';
-      final resourceIdAttr = node.getAttribute('resource-id') ?? '';
-      final contentDescAttr = node.getAttribute('content-desc') ?? '';
-      final indexAttr = node.getAttribute('index') ?? '';
-      final clickableAttr = node.getAttribute('clickable') ?? '';
-
-      if (textAttr.contains('Update Available')) updateFound = true;
-      if (textAttr.trim() == 'Later') laterFound = true;
-      if (textAttr.trim() == 'Connect') connectFound = true;
-      if (textAttr.trim() == 'Pause') pauseFound = true;
-      if (textAttr.trim() == 'Resume') resumeFound = true;
-      if (textAttr.trim() == 'Cancel') cancelFound = true;
-      if (textAttr.trim() == 'Navigate Without Map') {
-        navigateWithoutMapFound = true;
-      }
-      if (textAttr.trim() == 'Power save') paused = true;
-
-      if (textAttr.trim() == 'Not Connected') notConnectedFound = true;
-
-      if (contentDescAttr.trim() == 'Boat scan icon') boatScanIconFound = true;
-
-      scanOptionsIndex = paused == true ? '2' : '1';
-      if (indexAttr.trim() == scanOptionsIndex &&
-          clickableAttr.trim() == 'true') {
-        scanOptionsFound = true;
-      }
-
-      openMenuIndex = notConnectedFound == true ? '3' : '3';
-      if (indexAttr.trim() == openMenuIndex && clickableAttr.trim() == 'true') {
-        bool hasFabImageChild = _hasFabImageDescendant(node, 'Fab Image');
-
-        if (hasFabImageChild) {
-          openMenuFound = true;
-          _openMenuNode = node;
-        }
-      }
-      if (textAttr.trim() == 'History') historyFound = true;
-      if (resourceIdAttr.trim() == 'syncScansButton') syncScansFound = true;
-    }
-
-    if (updateFound && laterFound) {
-      print('Detected Update dialog → clicking Later button');
-      _clickElementSmart(doc, text: 'Later');
-      return;
-    }
-
-    if (navigateWithoutMapFound) {
-      print('Clicking navigate without map');
-      _clickElementSmart(doc, text: 'Navigate Without Map');
-      return;
-    }
-
-    if (!initialConnectionComplete) {
-      if (boatScanIconFound) {
-        print('Initial setup found Boat Scan Icon → clicking it');
-        _clickElementSmart(doc, contentDesc: 'Boat scan icon');
-
-        final hours = int.tryParse(_hoursController.text) ?? 0;
-        final minutes = int.tryParse(_minutesController.text) ?? 0;
-        final seconds = int.tryParse(_secondsController.text) ?? 0;
-        final totalSeconds = hours * 3600 + minutes * 60 + seconds;
-        _startTimer(totalSeconds);
-
-        setState(() => initialConnectionComplete = true);
-        print(
-          'Initial connection complete. Starting timer and Pause/Resume cycle.',
-        );
-        return;
-      }
-
-      if (connectFound) {
-        print('Initial setup clicking Connect button');
-        _clickElementSmart(doc, text: 'Connect');
-        return;
-      }
-
-      if (cancelFound) {
-        print('Detected Cancel dialog → clicking Cancel');
-        _clickElementSmart(doc, text: 'Cancel');
-        return;
-      }
-    }
-
-    if (_readyToFinishScan) {
-      if (_isSynced) {
-        print('Scans synced. Transitioning to Tuya to turn off USB.');
-        setState(() => _currentState = AutoState.switchingOff);
-        _launchTuya();
-        return;
-      }
-
-      if (historyFound) {
-        print('Opening History');
-        _clickElementSmart(doc, text: 'History');
-        return;
-      }
-
-      if (syncScansFound) {
-        print('Syncing Scans');
-        _clickElementSmart(doc, resourceId: 'syncScansButton');
-        setState(() {
-          _isSynced = true;
+    XmlElement? findNode({String? text, String? contentDesc}) {
+      try {
+        return nodes.firstWhere((n) {
+          if (text != null) return n.getAttribute('text') == text;
+          if (contentDesc != null)
+            return n.getAttribute('content-desc') == contentDesc;
+          return false;
         });
-
-        return;
+      } catch (_) {
+        return null;
       }
+    }
 
-      if (openMenuFound) {
-        print('Timer over, Pause/Resume cleared. Clicking Menu (Fab Image).');
-        if (_openMenuNode != null) {
-          _clickByXmlNode(_openMenuNode!);
-          return;
-        }
+    final updateNode = nodes.any(
+      (n) => (n.getAttribute('text') ?? '').contains('Update Available'),
+    );
+    final laterNode = findNode(text: 'Later');
+    final navigateNode = findNode(text: 'Navigate Without Map');
+    final connectNode = findNode(text: 'Connect');
+    final cancelNode = findNode(text: 'Cancel');
+    final boatScanNode = findNode(contentDesc: 'Boat scan icon');
+
+    if (updateNode && laterNode != null) {
+      print('Detected Update dialog → clicking Later');
+      _clickByXmlNode(laterNode);
+      return;
+    }
+
+    if (navigateNode != null) {
+      print('Clicking navigate without map');
+      _clickByXmlNode(navigateNode);
+      return;
+    }
+
+    if (connectNode != null) {
+      print('Initial setup → clicking Connect');
+      _clickByXmlNode(connectNode);
+      return;
+    }
+
+    if (cancelNode != null) {
+      print('Detected Cancel dialog → clicking Cancel');
+      _clickByXmlNode(cancelNode);
+      return;
+    }
+
+    if (boatScanNode != null) {
+      print('Detected Boat scan icon');
+      _clickByXmlNode(boatScanNode);
+
+      final totalSeconds =
+          (int.tryParse(_hoursController.text) ?? 0) * 3600 +
+          (int.tryParse(_minutesController.text) ?? 0) * 60 +
+          (int.tryParse(_secondsController.text) ?? 0);
+      _startTimer(totalSeconds);
+      setState(() => initialConnectionComplete = true);
+      return;
+    }
+
+    print('No actionable elements found');
+  }
+
+  bool exportedCsv = false;
+  void _handleUploadScan(XmlDocument doc) {
+    if (_isSynced) {
+      print('Scans synced. Transitioning to Tuya to turn off USB.');
+      setState(() => _currentState = AutoState.switchingOff);
+      _launchTuya();
+      return;
+    }
+    final nodes = doc.findAllElements('node').toList();
+
+    XmlElement? findNode({String? text, String? resId, String? contentDesc}) {
+      try {
+        return nodes.firstWhere((n) {
+          if (text != null)
+            return (n.getAttribute('text') ?? '').contains(text);
+          if (resId != null)
+            return (n.getAttribute('resource-id') ?? '').contains(resId);
+          if (contentDesc != null)
+            return (n.getAttribute('content-desc') ?? '').contains(contentDesc);
+          return false;
+        });
+      } catch (_) {
+        return null;
       }
+    }
+
+    final saveToFilesNode = findNode(text: 'Files by Google');
+    final exportCsvNode = findNode(text: 'Export scan data as CSV');
+    final moreIconNode = findNode(contentDesc: 'moreIcon');
+    final syncScansNode = findNode(resId: 'syncScansButton');
+    final historyNode = findNode(text: 'History');
+    final menuButtonNode = findNode(resId: 'menuButton');
+
+    if (saveToFilesNode != null && !exportedCsv) {
+      print('Saving to files via XML');
+      _clickByXmlNode(saveToFilesNode);
+      exportedCsv = true;
+      return;
+    }
+
+    if (exportCsvNode != null && !exportedCsv) {
+      print("Exporting CSV data to phone via XML");
+      _clickByXmlNode(exportCsvNode);
+      return;
+    }
+
+    if (moreIconNode != null && !exportedCsv) {
+      print("Clicking moreIcon via XML");
+      _clickByXmlNode(moreIconNode);
+      return;
+    }
+
+    if (syncScansNode != null) {
+      print('History loaded: Clicking Sync via XML...');
+      _clickByXmlNode(syncScansNode);
+      setState(() => _isSynced = true);
+      return;
+    }
+
+    if (historyNode != null) {
+      print('Ready to sync: Clicking History via XML...');
+      _clickByXmlNode(historyNode);
+      return;
+    }
+
+    if (menuButtonNode != null) {
+      print('Clicking Menu Button via XML.');
+      _clickByXmlNode(menuButtonNode);
+      return;
     }
 
     print('No actionable elements found in the current UI state');
@@ -629,22 +615,13 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     );
   }
 
-  void _clickByIndex(String index) {
-    final cmd = {
-      "action": "clickByIndex",
-      "index": index,
-      "deviceId": getSelectedDeviceId(),
-      "sender": deviceId,
-    };
-    ws.sendCommand(cmd);
-    print("Sent clickByIndex for index='$index' to ${getSelectedDeviceId()}");
-  }
-
   void startAutomation() {
+    /*
     if (!isConnected) {
       print("Not connected to WebSocket.");
       return;
     }
+    */
 
     if (selectedDevice == null) {
       print("Please select a device before starting automation.");
@@ -708,24 +685,6 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     });
   }
 
-  void toggleUsbSwitch(String xml) {
-    final scanDeviceId = getSelectedDeviceId();
-
-    final Map<String, String> launchUsbController = <String, String>{
-      "action": "launch",
-      "package":
-          "com.tuya.smart/com.thingclips.smart.hometab.activity.FamilyHomeActivity",
-      "deviceId": scanDeviceId,
-      "sender": deviceId,
-    };
-
-    ws.sendCommand(launchUsbController);
-
-    final doc = XmlDocument.parse(xml);
-    _clickElementSmart(doc, resourceId: 'com.tuya.smart:id/switchButton');
-    return;
-  }
-
   String _formatDuration(Duration duration) {
     String twoDigits(int n) => n.toString().padLeft(2, "0");
     String minutes = twoDigits(duration.inMinutes.remainder(60));
@@ -733,53 +692,15 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     return "$minutes:$seconds";
   }
 
-  Widget _buildBatteryStatus() {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          'BATTERY',
-          style: TextStyle(
-            color: Colors.grey[500],
-            fontWeight: FontWeight.bold,
-            fontSize: 12,
-            letterSpacing: 1.2,
-          ),
-        ),
-        const SizedBox(height: 8),
-        if (_batteryPercent == null)
-          Text(
-            'Start scan to determine battery',
-            style: TextStyle(
-              color: Colors.grey,
-              fontStyle: FontStyle.italic,
-              fontSize: 14,
-            ),
-          )
-        else
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                _batteryPercent! < 20
-                    ? Icons.battery_alert
-                    : Icons.battery_full,
-                color: Colors.blue[600],
-                size: 20,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '$_batteryPercent%',
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.blueGrey[900],
-                ),
-              ),
-            ],
-          ),
-      ],
-    );
+  SystemStatus _getCardStatus() {
+    switch (_connectionStatus) {
+      case WebSocketConnectionStatus.connected:
+        return SystemStatus.online;
+      case WebSocketConnectionStatus.connecting:
+        return SystemStatus.connecting;
+      case WebSocketConnectionStatus.disconnected:
+        return SystemStatus.offline;
+    }
   }
 
   Widget _buildTimerDisplay() {
@@ -860,11 +781,28 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: Device.values.map((device) {
+            String label = device.toString().split('.').last;
+            String displayName = label
+                .replaceAllMapped(
+                  RegExp(r'([A-Z])'),
+                  (match) => ' ${match.group(1)}',
+                )
+                .trim();
+            displayName =
+                displayName[0].toUpperCase() + displayName.substring(1);
             return ElevatedButton(
               onPressed: () {
                 setState(() {
                   selectedDevice = device;
+                  _activeSiteName = displayName;
+                  _statusCardKey = UniqueKey();
                 });
+                if (_connectionStatus ==
+                    WebSocketConnectionStatus.disconnected) {
+                  _attemptConnection();
+                } else {
+                  _sendPing();
+                }
               },
               style: ElevatedButton.styleFrom(
                 shape: RoundedRectangleBorder(
@@ -911,63 +849,19 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
                               width: 200,
                             ),
                             const SizedBox(height: 12),
-                            Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Text(
-                                    "WebSocket Connection",
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Container(
-                                        width: 10,
-                                        height: 10,
-                                        decoration: BoxDecoration(
-                                          color: _getStatusColor(),
-                                          shape: BoxShape.circle,
-                                          boxShadow: [
-                                            if (_connectionStatus ==
-                                                WebSocketConnectionStatus
-                                                    .connecting)
-                                              BoxShadow(
-                                                color: Colors.orange.withValues(
-                                                  alpha: 0.5,
-                                                ),
-                                                blurRadius: 8,
-                                                spreadRadius: 2,
-                                              ),
-                                          ],
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        _getStatusText(),
-                                        style: TextStyle(
-                                          color: _getStatusColor(),
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-
-                                  const SizedBox(height: 4),
-                                  const Divider(),
-                                  Center(child: _buildBatteryStatus()),
-                                  const Divider(),
-                                ],
-                              ),
-                            ),
                           ],
                         ),
-
+                        if (selectedDevice != null) ...[
+                          SystemStatusCard(
+                            key: _statusCardKey,
+                            status: automationRunning
+                                ? SystemStatus.connecting
+                                : _getCardStatus(),
+                            siteName: _activeSiteName,
+                            onSendPing: _sendPing,
+                          ),
+                          const SizedBox(height: 20),
+                        ],
                         Column(
                           children: [
                             _buildDeviceSelection(),
@@ -1017,8 +911,7 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
 
                         Column(
                           children: [
-                            const Divider(),
-                            const SizedBox(height: 10),
+                            const SizedBox(height: 20),
                             ElevatedButton.icon(
                               onPressed: automationRunning
                                   ? null
