@@ -78,6 +78,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  String deviceId = "controllerFlutter";
   late Future<Weather> futureWeather;
   String selectedMetric = 'Temperature (°F)';
   List<double> selectedData = [];
@@ -86,8 +87,74 @@ class _HomeScreenState extends State<HomeScreen> {
       WebSocketConnectionStatus.disconnected;
   Timer? _reconnectTimer;
   StreamSubscription? _uiSubscription;
-  String deviceId = "controllerFlutter";
   Device? selectedDevice;
+
+  void _attemptConnection() {
+    setState(() => _connectionStatus = WebSocketConnectionStatus.connecting);
+    _uiSubscription?.cancel();
+
+    ws
+        .connect()
+        .then((_) {
+          if (!mounted) return;
+
+          _uiSubscription = ws.messages.listen(
+            (data) {
+              if (_checkDataForSuccess(data)) {
+                debugPrint("Phone confirmed ONLINE ✅");
+                setState(() {
+                  _connectionStatus = WebSocketConnectionStatus.connected;
+                });
+              }
+            },
+            onError: (error) => _handleDisconnection(),
+            onDone: () => _handleDisconnection(),
+          );
+
+          _sendPing();
+        })
+        .catchError((e) => _handleDisconnection());
+  }
+
+  bool _checkDataForSuccess(dynamic data) {
+    if (data is! Map) return false;
+
+    Map<String, dynamic> responseData;
+
+    if (data.containsKey("body") && data["body"] is String) {
+      try {
+        responseData = json.decode(data["body"]).cast<String, dynamic>();
+      } catch (e) {
+        debugPrint("Error parsing body string: $e");
+        return false;
+      }
+    } else {
+      responseData = data.cast<String, dynamic>();
+    }
+
+    final String? status = responseData["status"];
+    final String? action = responseData["action"];
+
+    if (status == "online" || action == "checkOnline") {
+      return true;
+    }
+
+    return false;
+  }
+
+  void _sendPing() {
+    if (_connectionStatus == WebSocketConnectionStatus.disconnected) return;
+
+    setState(() {
+      _connectionStatus = WebSocketConnectionStatus.connecting;
+    });
+
+    ws.sendCommand({
+      "action": "checkOnline",
+      "deviceId": "testAndroid",
+      "sender": deviceId,
+    });
+  }
 
   @override
   void initState() {
@@ -103,29 +170,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _uiSubscription?.cancel();
     ws.disconnect();
     super.dispose();
-  }
-
-  void _attemptConnection() {
-    _reconnectTimer?.cancel();
-    setState(() => _connectionStatus = WebSocketConnectionStatus.connecting);
-    _uiSubscription?.cancel();
-
-    ws
-        .connect()
-        .then((_) {
-          if (!mounted) return;
-          setState(() {
-            _connectionStatus = WebSocketConnectionStatus.connected;
-          });
-
-          _uiSubscription = ws.messages.listen(
-            (data) {},
-            onError: (error) => _handleDisconnection(),
-            onDone: () => _handleDisconnection(),
-            cancelOnError: true,
-          );
-        })
-        .catchError((e) => _handleDisconnection());
   }
 
   void _handleDisconnection() {
@@ -250,7 +294,11 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SystemStatusCard(status: _mapStatus(), siteName: 'Site One'),
+            SystemStatusCard(
+              status: _mapStatus(),
+              siteName: 'Site One',
+              onSendPing: _sendPing,
+            ),
             const SizedBox(height: 10),
             const Padding(
               padding: EdgeInsets.only(left: 4, bottom: 8),

@@ -77,3 +77,8 @@ captures/
 *.dll
 *.so
 *.dylib
+
+
+FishDeeperCsvLogs/
+data_visualization/*.png
+**/*.xml

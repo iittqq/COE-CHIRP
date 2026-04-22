@@ -17,7 +17,17 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'WebSocket Control',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+
+        scaffoldBackgroundColor: Colors.white,
+
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Colors.white,
+          foregroundColor: Colors.black,
+          elevation: 0,
+        ),
+
+        useMaterial3: true,
       ),
       home: const MainNavigation(),
       debugShowCheckedModeBanner: false,

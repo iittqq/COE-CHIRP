@@ -1,21 +1,83 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 enum SystemStatus { online, connecting, offline }
 
-class SystemStatusCard extends StatelessWidget {
+class SystemStatusCard extends StatefulWidget {
   final SystemStatus status;
   final String siteName;
+  final VoidCallback onSendPing;
 
   const SystemStatusCard({
     super.key,
     required this.status,
     required this.siteName,
+    required this.onSendPing,
   });
 
   @override
+  State<SystemStatusCard> createState() => _SystemStatusCardState();
+}
+
+class _SystemStatusCardState extends State<SystemStatusCard>
+    with SingleTickerProviderStateMixin {
+  late Ticker _ticker;
+  Duration _elapsed = Duration.zero;
+  static const Duration _pingInterval = Duration(seconds: 60);
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = createTicker((elapsed) {
+      if (widget.status != SystemStatus.online) {
+        _ticker.stop();
+        return;
+      }
+
+      setState(() {
+        _elapsed = elapsed;
+        if (_elapsed >= _pingInterval) {
+          widget.onSendPing();
+          _ticker.stop();
+          _ticker.start();
+        }
+      });
+    });
+
+    if (widget.status == SystemStatus.online) {
+      _ticker.start();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant SystemStatusCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (widget.status == SystemStatus.online &&
+        oldWidget.status != SystemStatus.online) {
+      _ticker.stop();
+      setState(() => _elapsed = Duration.zero);
+      _ticker.start();
+    } else if (widget.status != SystemStatus.online && _ticker.isActive) {
+      _ticker.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _ticker.dispose();
+    super.dispose();
+  }
+
+  String _getRemainingTime() {
+    if (widget.status != SystemStatus.online) return "Verifying...";
+    final remaining = _pingInterval - _elapsed;
+    return "${remaining.inSeconds}s";
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final bool isOnline = status == SystemStatus.online;
-    final bool isConnecting = status == SystemStatus.connecting;
+    final bool isOnline = widget.status == SystemStatus.online;
 
     Color bgColor = const Color(0xFFFEEBC8);
     Color dotColor = Colors.orange;
@@ -27,7 +89,7 @@ class SystemStatusCard extends StatelessWidget {
       dotColor = const Color(0xFF38A169);
       textColor = const Color(0xFF2F855A);
       statusLabel = "Online";
-    } else if (status == SystemStatus.offline) {
+    } else if (widget.status == SystemStatus.offline) {
       bgColor = Colors.red.shade50;
       dotColor = Colors.red;
       textColor = Colors.red.shade800;
@@ -37,15 +99,25 @@ class SystemStatusCard extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
-          padding: EdgeInsets.only(left: 4, bottom: 12),
-          child: Text(
-            "System Status",
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: Colors.grey,
-            ),
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 12, right: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                "System Status",
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey,
+                ),
+              ),
+              if (isOnline)
+                Text(
+                  "Next check: ${_getRemainingTime()}",
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+            ],
           ),
         ),
         Container(
@@ -122,7 +194,7 @@ class SystemStatusCard extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               Text(
-                siteName,
+                widget.siteName,
                 style: const TextStyle(
                   fontSize: 30,
                   fontWeight: FontWeight.w800,
