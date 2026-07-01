@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:ionicons/ionicons.dart';
+import 'package:ionicons_plus/ionicons_plus.dart';
 import 'chart.dart';
 import '../utils/scan_repo.dart';
 import '../utils/import_scan.dart';
