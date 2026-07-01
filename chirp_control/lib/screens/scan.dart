@@ -38,7 +38,6 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
       WebSocketConnectionStatus.disconnected;
   Timer? _reconnectTimer;
   StreamSubscription? _uiSubscription;
-  int? _batteryPercent;
   Completer<XmlDocument>? _xmlUpdateCompleter;
 
   String deviceId = "controllerFlutter";
@@ -54,7 +53,6 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
   Duration _remainingDuration = Duration.zero;
   Duration _sessionDuration = Duration.zero;
 
-  XmlElement? _openMenuNode;
   bool _isSynced = false;
 
   bool _readyToFinishScan = false;
@@ -272,7 +270,10 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     }
   }
 
-  void _handleTuyaToggle(XmlDocument doc, {required AutoState nextState}) {
+  Future<void> _handleTuyaToggle(
+    XmlDocument doc, {
+    required AutoState nextState,
+  }) async {
     final switchBtn = doc
         .findAllElements('node')
         .firstWhere(
@@ -287,41 +288,42 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
 
       setState(() => _currentState = nextState);
 
-      Future.delayed(const Duration(seconds: 20), () {
-        if (nextState == AutoState.adjustingShade) {
-          _launchShades();
-        } else {
-          _closeApp(packageName: "com.tuya.smart");
+      if (nextState == AutoState.adjustingShade) {
+        await Future.delayed(const Duration(seconds: 20));
+        _launchShades();
+      } else {
+        print("Starting sequential shutdown...");
 
-          Future.delayed(const Duration(seconds: 10), () {
-            _closeApp(packageName: "eu.deeper.fishdeeper");
-          });
+        await Future.delayed(const Duration(seconds: 5));
+        _closeApp(packageName: "com.tuya.smart");
 
-          Future.delayed(const Duration(seconds: 20), () {
-            _closeApp(
-              packageName:
-                  "com.wazombi.RISE/crc64c90e479072a4489e.DrawerMainActivity",
-            );
-          });
+        await Future.delayed(const Duration(seconds: 5));
+        _closeApp(packageName: "eu.deeper.fishdeeper");
 
-          Future.delayed(const Duration(seconds: 30), () {
-            ws.sendCommand({
-              "action": "wifi",
-              "state": "on",
-              "deviceId": getSelectedDeviceId(),
-              "sender": deviceId,
-            });
-          });
+        await Future.delayed(const Duration(seconds: 5));
+        _closeApp(
+          packageName:
+              "com.wazombi.RISE/crc64c90e479072a4489e.DrawerMainActivity",
+        );
 
+        await Future.delayed(const Duration(seconds: 5));
+        ws.sendCommand({
+          "action": "wifi",
+          "state": "on",
+          "deviceId": getSelectedDeviceId(),
+          "sender": deviceId,
+        });
+
+        if (mounted) {
           setState(() {
             automationRunning = false;
             _isSynced = false;
             _currentState = AutoState.idle;
             _statusCardKey = UniqueKey();
           });
-          print("Sequence Complete.");
         }
-      });
+        print("Sequence Complete.");
+      }
     }
   }
 
@@ -825,6 +827,25 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     );
   }
 
+  String _getButtonLabel() {
+    if (!automationRunning) return "Begin Scan";
+
+    switch (_currentState) {
+      case AutoState.switchingOn:
+        return "Powering On...";
+      case AutoState.adjustingShade:
+        return "Adjusting Shade...";
+      case AutoState.performingScan:
+        return "Scanning...";
+      case AutoState.uploadingScan:
+        return "Uploading Scan...";
+      case AutoState.switchingOff:
+        return "Finishing Up...";
+      case AutoState.idle:
+        return "Begin Scan";
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -922,9 +943,7 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
                                     : Icons.play_arrow,
                               ),
                               label: Text(
-                                automationRunning
-                                    ? "Scanning..."
-                                    : "Begin Scan",
+                                _getButtonLabel(),
                                 style: const TextStyle(fontSize: 16),
                               ),
                               style: ElevatedButton.styleFrom(

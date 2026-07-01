@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'components/nav_bar.dart';
 import './screens/home.dart';
 import './screens/scan.dart';
-import './screens/menu.dart';
 import './screens/data.dart';
+import './screens/settings.dart';
 
 void main() {
   runApp(const MyApp());
@@ -55,12 +55,12 @@ class _MainNavigationState extends State<MainNavigation> {
     HomeScreen(onNavScan: () => _onNavTapped(1)),
     const DeviceControlPage(),
     const HistoryPage(),
-    const MenuScreen(),
+    const SettingsScreen(),
   ];
 
   @override
   Widget build(BuildContext context) {
-    final titles = ['Home', 'Initiate Scan', 'Data', 'Menu'];
+    final titles = ['Home', 'Initiate Scan', 'Data', 'Settings'];
 
     return Scaffold(
       appBar: AppBar(title: Text(titles[_selectedIndex])),
