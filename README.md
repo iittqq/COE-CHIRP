@@ -1,4 +1,4 @@
-# Chirp
+# Developing a Software-based CHIRP Sonar System to Track Mudline Elevation During Dredging
 
 A software-based CHIRP sonar system for tracking mudline elevation in real time during marsh creation dredging on the Louisiana coast.
 
@@ -30,18 +30,18 @@ Chirp pairs a commercial CHIRP (Compressed High-Intensity Radiated Pulse) sonar 
 The sonar hardware itself is a commercial, off-the-shelf transducer with proprietary, closed firmware — it only speaks to its own companion app over Wi-Fi. To make it remotely controllable, Chirp treats a rooted Android phone as a physical proxy: commands sent from a mobile app are translated into simulated taps and swipes (`input tap` / `input swipe`) on the proprietary sonar app, and the phone's UI hierarchy (XML) is captured and streamed back so the controller can confirm state and decide the next action.
 
 ```
- ┌────────────┐  commands   ┌────────────┐   WebSocket   ┌─────────────────┐
- │  Flutter    │ ──────────▶ │ AWS Lambda /│ ────────────▶│  Rooted Android  │
- │  mobile app │             │  WebSocket  │               │  on-site device  │
- │ (iOS/Android)│◀──────────│  (AWS Cloud)│◀────────────  │  + CHIRP sonar   │
- └────────────┘  scan data  └──────┬──────┘  XML / scans  └─────────────────┘
-                                    │
-                                    ▼
-                             ┌─────────────┐
-                             │  DynamoDB   │
-                             │ (device IDs,│
-                             │  scan data) │
-                             └─────────────┘
+ ┌───────────────┐  commands   ┌─────────────┐   WebSocket   ┌──────────────────┐
+ │  Flutter      │ ──────────▶ │ AWS Lambda /│ ────────────▶ │  Rooted Android  │
+ │  mobile app   │             │  WebSocket  │               │  on-site device  │
+ │ (iOS/Android) │◀──────────  │  (AWS Cloud)│◀────────────  │  + CHIRP sonar   │
+ └───────────────┘  scan data  └──────┬──────┘  XML / scans  └──────────────────┘
+                                      │
+                                      ▼
+                                ┌─────────────┐
+                                │  DynamoDB   │
+                                │ (device IDs,│
+                                │  scan data) │
+                                └─────────────┘
 ```
 
 ![Chirp system data flow: mobile app, AWS cloud, and the on-site rooted Android device](chirp_control/assets/system-data-flow.png)
@@ -72,7 +72,7 @@ chirp/
 ├── chirp_control/          Flutter mobile app (scan control, live data, settings)
 │   └── lambda/              AWS Lambda functions for remote control and sonar command handling
 ├── data_visualization/      Jupyter notebooks and scripts for processing bathymetry scan data
-├── FishDeeperCsvLogs/       Raw CSV scan logs exported from the sonar's companion app
+└── FishDeeperCsvLogs/       Raw CSV scan logs exported from the sonar's companion app
 ```
 
 ## Getting started
@@ -86,8 +86,8 @@ The system was validated in two phases:
 1. **Laboratory settling column tests** — a transparent settling column filled with water and site-specific dredged sediment, with the sonar mounted above and facing down, was used to calibrate the system and confirm it could track the mudline as it elevated during settling, even through heavy suspended slurry.
 2. **Local field deployment** — the fully assembled system (enclosure, solar power, step motor, and rooted phone) was deployed to validate end-to-end automation and resilience against intermittent cellular connectivity.
 
-| Depth accuracy across sand heights | Mudline tracking over a scan |
-| --- | --- |
+| Depth accuracy across consistent sand heights                                                | Depth accuracy across consistent sand heights over time                                                                                |
+| -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | ![Average bathymetry depth vs. recorded depth](chirp_control/assets/bathymetry-constant.png) | ![CHIRP bathymetry depth over time, showing mudline elevation as sand height increases](chirp_control/assets/bathymetry-over-time.png) |
 
 ![Local field deployment — solar-powered enclosure on a pole in shallow water](chirp_control/assets/local-deployment.jpg)
@@ -103,4 +103,3 @@ By wrapping a commercial CHIRP sonar in an app-controllable, cloud-connected sys
 Relying on commercial hardware with closed firmware introduced real costs: brittle UI-automation-based control, and communication latency across phone → WebSocket → cloud → phone round trips. The clear next step is custom hardware — a standalone CHIRP transducer wired directly to a microcontroller (e.g. an ESP32 or Raspberry Pi Compute Module) with its own LTE modem — to remove the smartphone middleman entirely, extract raw acoustic backscatter, and cut power draw for longer field deployments.
 
 **Special thanks:** Dr. Celalettin Emre Ozdemir, Dr. Navid H Jafari
-
