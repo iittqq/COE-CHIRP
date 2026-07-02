@@ -42,7 +42,8 @@ dependencies:
   http: ^1.4.0
   flutter_svg: ^2.2.4
   intl: ^0.20.2
-  ionicons: ^0.2.2
+  ionicons_plus: ^0.2.5
+  device_info_plus: ^10.1.0
   archive: ^4.0.9
   xml: ^6.5.0
 

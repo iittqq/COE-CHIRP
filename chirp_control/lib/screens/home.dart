@@ -10,6 +10,7 @@ import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 import 'dart:async';
 import '../utils/websocket_controller.dart';
+import '../utils/sonar_repository.dart';
 
 Future<Weather> fetchWeather() async {
   final response = await http.get(
@@ -87,7 +88,9 @@ class _HomeScreenState extends State<HomeScreen> {
       WebSocketConnectionStatus.disconnected;
   Timer? _reconnectTimer;
   StreamSubscription? _uiSubscription;
-  Device? selectedDevice;
+
+  List<Map<String, String>> _registeredSonars = [];
+  bool _sonarLoading = true;
 
   void _attemptConnection() {
     setState(() => _connectionStatus = WebSocketConnectionStatus.connecting);
@@ -162,6 +165,19 @@ class _HomeScreenState extends State<HomeScreen> {
     futureWeather = fetchWeather();
     ws = WebSocketService(deviceId: deviceId);
     _attemptConnection();
+    _loadSonars();
+  }
+
+  Future<void> _loadSonars() async {
+    setState(() => _sonarLoading = true);
+    try {
+      final sonars = await SonarRepository.fetchSonars();
+      if (mounted) setState(() => _registeredSonars = sonars);
+    } catch (_) {
+      if (mounted) setState(() => _registeredSonars = []);
+    } finally {
+      if (mounted) setState(() => _sonarLoading = false);
+    }
   }
 
   @override
@@ -294,11 +310,22 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SystemStatusCard(
-              status: _mapStatus(),
-              siteName: 'Site One',
-              onSendPing: _sendPing,
-            ),
+            if (_sonarLoading)
+              const Center(child: CircularProgressIndicator())
+            else if (_registeredSonars.isEmpty)
+              _buildNoSonarsCard()
+            else
+              ..._registeredSonars.map(
+                (sonar) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: SystemStatusCard(
+                    key: ValueKey(sonar['sonar_id']),
+                    status: _mapStatus(),
+                    siteName: sonar['name'] ?? sonar['sonar_id'] ?? '',
+                    onSendPing: _sendPing,
+                  ),
+                ),
+              ),
             const SizedBox(height: 10),
             const Padding(
               padding: EdgeInsets.only(left: 4, bottom: 8),
@@ -413,6 +440,37 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildNoSonarsCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.grey.shade100),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.sensors_off, color: Colors.grey.shade400, size: 28),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Text(
+              'No sonars registered. Add one in Settings.',
+              style: TextStyle(color: Colors.grey, fontSize: 14),
+            ),
+          ),
+        ],
       ),
     );
   }

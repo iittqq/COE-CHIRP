@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'sonar_sensors.dart';
+import '../utils/sonar_repository.dart';
 
 void main() {
   runApp(const MyApp());
@@ -28,6 +30,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool isMetric = true;
   bool sonarAlerts = true;
   bool dredgeWarnings = true;
+
+  List<Map<String, String>> _sonars = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSonars();
+  }
+
+  Future<void> _loadSonars() async {
+    try {
+      final sonars = await SonarRepository.fetchSonars();
+      if (mounted) setState(() => _sonars = sonars);
+    } catch (_) {}
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -219,7 +236,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          '1 Active',
+                          '${_sonars.length} Active',
                           style: TextStyle(
                             color: Colors.grey.shade500,
                             fontSize: 14,
@@ -229,7 +246,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         Icon(Icons.chevron_right, color: Colors.grey.shade400),
                       ],
                     ),
-                    onTap: () {},
+                    onTap: () async {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const SonarSensorsScreen(),
+                        ),
+                      );
+                      _loadSonars();
+                    },
                   ),
                 ],
               ),

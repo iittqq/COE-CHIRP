@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../utils/websocket_controller.dart';
+import '../utils/sonar_repository.dart';
 import 'dart:io';
 import 'package:xml/xml.dart';
 import 'package:chirp_control/components/scan_duration_input.dart';
@@ -9,8 +10,6 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../components/system_status_card.dart';
 
 enum WebSocketConnectionStatus { disconnected, connecting, connected }
-
-enum Device { test, siteOne, siteTwo }
 
 enum AutoState {
   idle,
@@ -57,7 +56,10 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
 
   bool _readyToFinishScan = false;
 
-  Device? selectedDevice;
+  List<Map<String, String>> _registeredSonars = [];
+  bool _sonarLoading = true;
+  Map<String, String>? _selectedSonar;
+
   final TextEditingController _hoursController = TextEditingController(
     text: '0',
   );
@@ -70,12 +72,6 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
   final TextEditingController _delayController = TextEditingController(
     text: '5',
   );
-
-  final Map<Device, String> deviceIdMap = {
-    Device.test: 'testAndroid',
-    Device.siteOne: 'otherAndroid',
-    Device.siteTwo: 'anotherAndroid',
-  };
 
   void _attemptConnection() {
     setState(() => _connectionStatus = WebSocketConnectionStatus.connecting);
@@ -150,7 +146,7 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
   }
 
   void _sendPing() {
-    if (automationRunning || selectedDevice == null) {
+    if (automationRunning || _selectedSonar == null) {
       print("Ping suppressed: Automation is currently running.");
       return;
     }
@@ -181,6 +177,19 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     super.initState();
     _reconnectTimer?.cancel();
     ws = WebSocketService(deviceId: deviceId);
+    _loadSonars();
+  }
+
+  Future<void> _loadSonars() async {
+    setState(() => _sonarLoading = true);
+    try {
+      final sonars = await SonarRepository.fetchSonars();
+      if (mounted) setState(() => _registeredSonars = sonars);
+    } catch (_) {
+      if (mounted) setState(() => _registeredSonars = []);
+    } finally {
+      if (mounted) setState(() => _sonarLoading = false);
+    }
   }
 
   @override
@@ -203,9 +212,7 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
   }
 
   String getSelectedDeviceId() {
-    return selectedDevice != null
-        ? deviceIdMap[selectedDevice]!
-        : 'testAndroid';
+    return _selectedSonar?['sonar_id'] ?? 'testAndroid';
   }
 
   void _startTimer(int totalSeconds) {
@@ -625,7 +632,7 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     }
     */
 
-    if (selectedDevice == null) {
+    if (_selectedSonar == null) {
       print("Please select a device before starting automation.");
       ScaffoldMessenger.of(
         context,
@@ -780,49 +787,47 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: Device.values.map((device) {
-            String label = device.toString().split('.').last;
-            String displayName = label
-                .replaceAllMapped(
-                  RegExp(r'([A-Z])'),
-                  (match) => ' ${match.group(1)}',
-                )
-                .trim();
-            displayName =
-                displayName[0].toUpperCase() + displayName.substring(1);
-            return ElevatedButton(
-              onPressed: () {
-                setState(() {
-                  selectedDevice = device;
-                  _activeSiteName = displayName;
-                  _statusCardKey = UniqueKey();
-                });
-                if (_connectionStatus ==
-                    WebSocketConnectionStatus.disconnected) {
-                  _attemptConnection();
-                } else {
-                  _sendPing();
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12.0),
+        if (_sonarLoading)
+          const Center(child: CircularProgressIndicator())
+        else if (_registeredSonars.isEmpty)
+          const Text(
+            'No sonars registered. Add one in Settings.',
+            style: TextStyle(color: Colors.grey),
+          )
+        else
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _registeredSonars.map((sonar) {
+              final isSelected =
+                  _selectedSonar?['sonar_id'] == sonar['sonar_id'];
+              return ElevatedButton(
+                onPressed: () {
+                  setState(() {
+                    _selectedSonar = sonar;
+                    _activeSiteName = sonar['name'] ?? '';
+                    _statusCardKey = UniqueKey();
+                  });
+                  if (_connectionStatus ==
+                      WebSocketConnectionStatus.disconnected) {
+                    _attemptConnection();
+                  } else {
+                    _sendPing();
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12.0),
+                  ),
+                  minimumSize: const Size(80, 80),
+                  padding: EdgeInsets.zero,
+                  backgroundColor: isSelected ? Colors.blue : Colors.grey[300],
+                  foregroundColor: isSelected ? Colors.white : Colors.black,
                 ),
-                minimumSize: Size(80, 80),
-                padding: EdgeInsets.zero,
-                backgroundColor: selectedDevice == device
-                    ? Colors.blue
-                    : Colors.grey[300],
-                foregroundColor: selectedDevice == device
-                    ? Colors.white
-                    : Colors.black,
-              ),
-              child: Text(device.toString().split('.').last),
-            );
-          }).toList(),
-        ),
+                child: Text(sonar['name'] ?? ''),
+              );
+            }).toList(),
+          ),
       ],
     );
   }
@@ -872,7 +877,7 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
                             const SizedBox(height: 12),
                           ],
                         ),
-                        if (selectedDevice != null) ...[
+                        if (_selectedSonar != null) ...[
                           SystemStatusCard(
                             key: _statusCardKey,
                             status: automationRunning
@@ -953,7 +958,7 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
                                 ),
                                 backgroundColor: automationRunning
                                     ? Colors.orange.shade700
-                                    : selectedDevice != null
+                                    : _selectedSonar != null
                                     ? Colors.blue.shade700
                                     : Colors.grey,
                                 foregroundColor: Colors.white,
