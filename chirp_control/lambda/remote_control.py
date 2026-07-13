@@ -9,8 +9,11 @@ import base64
 from io import BytesIO
 import traceback
 
+# Must match the sonar_id this physical unit is registered under in the app.
+# Each deployed sonar needs its own unique DEVICE_ID.
+DEVICE_ID = "testAndroid"
 SERVER_URL = (
-    "wss://ywh1uzhhk9.execute-api.us-east-2.amazonaws.com/test?deviceId=testAndroid"
+    f"wss://ywh1uzhhk9.execute-api.us-east-2.amazonaws.com/test?deviceId={DEVICE_ID}"
 )
 APP = "eu.deeper.fishdeeper"
 
@@ -60,6 +63,7 @@ async def handle_command(ws, command):
         cmd_type = data.get("action") or data.get("type")
         response = {"action": cmd_type, "status": "ok"}
         response["target"] = data.get("sender", None)
+        response["deviceId"] = DEVICE_ID
 
         if cmd_type == "launch":
             package = data.get("package")

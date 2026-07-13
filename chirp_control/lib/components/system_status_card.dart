@@ -7,12 +7,14 @@ class SystemStatusCard extends StatefulWidget {
   final SystemStatus status;
   final String siteName;
   final VoidCallback onSendPing;
+  final bool showHeader;
 
   const SystemStatusCard({
     super.key,
     required this.status,
     required this.siteName,
     required this.onSendPing,
+    this.showHeader = true,
   });
 
   @override
@@ -99,27 +101,28 @@ class _SystemStatusCardState extends State<SystemStatusCard>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 4, bottom: 12, right: 8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                "System Status",
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.grey,
+        if (widget.showHeader)
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 12, right: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  "System Status",
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey,
+                  ),
                 ),
-              ),
-              if (isOnline)
-                Text(
-                  "Next check: ${_getRemainingTime()}",
-                  style: const TextStyle(fontSize: 12, color: Colors.grey),
-                ),
-            ],
+                if (isOnline)
+                  Text(
+                    "Next check: ${_getRemainingTime()}",
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+              ],
+            ),
           ),
-        ),
         Container(
           padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(

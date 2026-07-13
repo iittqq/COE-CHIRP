@@ -1,23 +1,36 @@
 import 'dart:convert';
-import 'dart:io';
+import 'dart:math';
 import 'package:http/http.dart' as http;
-import 'package:device_info_plus/device_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // Replace with your API Gateway invoke URL after deploying the Lambda.
 const _baseUrl = 'https://078qjv1849.execute-api.us-east-2.amazonaws.com';
 
-class SonarRepository {
-  static final _deviceInfo = DeviceInfoPlugin();
+const _userIdPrefsKey = 'chirp_device_user_id';
 
+class SonarRepository {
+  static String? _cachedUserId;
+
+  // Generates a random ID once and persists it locally, so it stays stable
+  // across app restarts and OS updates (unlike device_info_plus's Android
+  // build ID, which changes on OTA updates and can collide across devices).
   static Future<String> getUserId() async {
-    if (Platform.isAndroid) {
-      final info = await _deviceInfo.androidInfo;
-      return info.id;
-    } else if (Platform.isIOS) {
-      final info = await _deviceInfo.iosInfo;
-      return info.identifierForVendor ?? 'unknown_ios';
+    if (_cachedUserId != null) return _cachedUserId!;
+
+    final prefs = await SharedPreferences.getInstance();
+    var userId = prefs.getString(_userIdPrefsKey);
+    if (userId == null) {
+      userId = _generateId();
+      await prefs.setString(_userIdPrefsKey, userId);
     }
-    return 'unknown';
+    _cachedUserId = userId;
+    return userId;
+  }
+
+  static String _generateId() {
+    final rand = Random.secure();
+    final bytes = List<int>.generate(16, (_) => rand.nextInt(256));
+    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 
   static Future<List<Map<String, String>>> fetchSonars() async {

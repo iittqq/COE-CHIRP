@@ -92,6 +92,13 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, String>> _registeredSonars = [];
   bool _sonarLoading = true;
 
+  final Map<String, SystemStatus> _sonarStatuses = {};
+  final Map<String, Timer> _pingTimeoutTimers = {};
+  static const _pingTimeout = Duration(seconds: 15);
+
+  final _sonarPageController = PageController(viewportFraction: 0.92);
+  int _currentSonarPage = 0;
+
   void _attemptConnection() {
     setState(() => _connectionStatus = WebSocketConnectionStatus.connecting);
     _uiSubscription?.cancel();
@@ -101,26 +108,23 @@ class _HomeScreenState extends State<HomeScreen> {
         .then((_) {
           if (!mounted) return;
 
+          setState(
+            () => _connectionStatus = WebSocketConnectionStatus.connected,
+          );
+
           _uiSubscription = ws.messages.listen(
-            (data) {
-              if (_checkDataForSuccess(data)) {
-                debugPrint("Phone confirmed ONLINE ✅");
-                setState(() {
-                  _connectionStatus = WebSocketConnectionStatus.connected;
-                });
-              }
-            },
+            _handleIncomingMessage,
             onError: (error) => _handleDisconnection(),
             onDone: () => _handleDisconnection(),
           );
 
-          _sendPing();
+          _pingAllSonars();
         })
         .catchError((e) => _handleDisconnection());
   }
 
-  bool _checkDataForSuccess(dynamic data) {
-    if (data is! Map) return false;
+  void _handleIncomingMessage(dynamic data) {
+    if (data is! Map) return;
 
     Map<String, dynamic> responseData;
 
@@ -129,32 +133,42 @@ class _HomeScreenState extends State<HomeScreen> {
         responseData = json.decode(data["body"]).cast<String, dynamic>();
       } catch (e) {
         debugPrint("Error parsing body string: $e");
-        return false;
+        return;
       }
     } else {
       responseData = data.cast<String, dynamic>();
     }
 
     final String? status = responseData["status"];
-    final String? action = responseData["action"];
+    final String? sonarId = responseData["deviceId"];
+    if (sonarId == null || status != "online") return;
 
-    if (status == "online" || action == "checkOnline") {
-      return true;
-    }
-
-    return false;
+    debugPrint("Sonar $sonarId confirmed ONLINE ✅");
+    _pingTimeoutTimers.remove(sonarId)?.cancel();
+    if (mounted) setState(() => _sonarStatuses[sonarId] = SystemStatus.online);
   }
 
-  void _sendPing() {
-    if (_connectionStatus == WebSocketConnectionStatus.disconnected) return;
+  void _pingAllSonars() {
+    for (final sonar in _registeredSonars) {
+      final id = sonar['sonar_id'];
+      if (id != null) _sendPingFor(id);
+    }
+  }
 
-    setState(() {
-      _connectionStatus = WebSocketConnectionStatus.connecting;
+  void _sendPingFor(String sonarId) {
+    if (_connectionStatus != WebSocketConnectionStatus.connected) return;
+
+    setState(() => _sonarStatuses[sonarId] = SystemStatus.connecting);
+
+    _pingTimeoutTimers.remove(sonarId)?.cancel();
+    _pingTimeoutTimers[sonarId] = Timer(_pingTimeout, () {
+      if (!mounted) return;
+      setState(() => _sonarStatuses[sonarId] = SystemStatus.offline);
     });
 
     ws.sendCommand({
       "action": "checkOnline",
-      "deviceId": "testAndroid",
+      "deviceId": sonarId,
       "sender": deviceId,
     });
   }
@@ -172,7 +186,10 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _sonarLoading = true);
     try {
       final sonars = await SonarRepository.fetchSonars();
-      if (mounted) setState(() => _registeredSonars = sonars);
+      if (mounted) {
+        setState(() => _registeredSonars = sonars);
+        _pingAllSonars();
+      }
     } catch (_) {
       if (mounted) setState(() => _registeredSonars = []);
     } finally {
@@ -183,14 +200,25 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _reconnectTimer?.cancel();
+    for (final timer in _pingTimeoutTimers.values) {
+      timer.cancel();
+    }
     _uiSubscription?.cancel();
     ws.disconnect();
+    _sonarPageController.dispose();
     super.dispose();
   }
 
   void _handleDisconnection() {
     if (!mounted) return;
-    setState(() => _connectionStatus = WebSocketConnectionStatus.disconnected);
+    setState(() {
+      _connectionStatus = WebSocketConnectionStatus.disconnected;
+      for (final timer in _pingTimeoutTimers.values) {
+        timer.cancel();
+      }
+      _pingTimeoutTimers.clear();
+      _sonarStatuses.updateAll((_, _) => SystemStatus.offline);
+    });
 
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(const Duration(seconds: 5), () {
@@ -289,17 +317,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  SystemStatus _mapStatus() {
-    switch (_connectionStatus) {
-      case WebSocketConnectionStatus.connected:
-        return SystemStatus.online;
-      case WebSocketConnectionStatus.connecting:
-        return SystemStatus.connecting;
-      case WebSocketConnectionStatus.disconnected:
-        return SystemStatus.offline;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -315,17 +332,7 @@ class _HomeScreenState extends State<HomeScreen> {
             else if (_registeredSonars.isEmpty)
               _buildNoSonarsCard()
             else
-              ..._registeredSonars.map(
-                (sonar) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: SystemStatusCard(
-                    key: ValueKey(sonar['sonar_id']),
-                    status: _mapStatus(),
-                    siteName: sonar['name'] ?? sonar['sonar_id'] ?? '',
-                    onSendPing: _sendPing,
-                  ),
-                ),
-              ),
+              _buildSonarCarousel(),
             const SizedBox(height: 10),
             const Padding(
               padding: EdgeInsets.only(left: 4, bottom: 8),
@@ -441,6 +448,93 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildSonarCarousel() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 12, right: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                "System Status",
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey,
+                ),
+              ),
+              if (_registeredSonars.length > 1)
+                Text(
+                  '${_currentSonarPage + 1} / ${_registeredSonars.length}',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+            ],
+          ),
+        ),
+        SizedBox(
+          height: 150,
+          child: PageView.builder(
+            controller: _sonarPageController,
+            itemCount: _registeredSonars.length,
+            onPageChanged: (index) => setState(() => _currentSonarPage = index),
+            itemBuilder: (context, index) {
+              final sonar = _registeredSonars[index];
+              final id = sonar['sonar_id'] ?? '';
+              return AnimatedBuilder(
+                animation: _sonarPageController,
+                builder: (context, child) {
+                  var scale = 1.0;
+                  if (_sonarPageController.position.haveDimensions) {
+                    final page =
+                        _sonarPageController.page ??
+                        _currentSonarPage.toDouble();
+                    scale = (1 - (page - index).abs() * 0.08).clamp(0.92, 1.0);
+                  }
+                  return Transform.scale(scale: scale, child: child);
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: SystemStatusCard(
+                    key: ValueKey(id),
+                    status: _sonarStatuses[id] ?? SystemStatus.connecting,
+                    siteName: sonar['name'] ?? id,
+                    onSendPing: () => _sendPingFor(id),
+                    showHeader: false,
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        if (_registeredSonars.length > 1) ...[
+          const SizedBox(height: 10),
+          Center(child: _buildPageDots()),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildPageDots() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(_registeredSonars.length, (index) {
+        final isActive = index == _currentSonarPage;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          margin: const EdgeInsets.symmetric(horizontal: 3),
+          width: isActive ? 18 : 6,
+          height: 6,
+          decoration: BoxDecoration(
+            color: isActive ? const Color(0xFF1E75EC) : Colors.grey.shade300,
+            borderRadius: BorderRadius.circular(3),
+          ),
+        );
+      }),
     );
   }
 

@@ -32,7 +32,8 @@ def handler(event, context):
         if method == 'GET':
             from boto3.dynamodb.conditions import Key
             result = table.query(
-                KeyConditionExpression=Key('user_id').eq(qs['user_id'])
+                KeyConditionExpression=Key('user_id').eq(qs['user_id']),
+                ConsistentRead=True,
             )
             return {
                 'statusCode': 200,
