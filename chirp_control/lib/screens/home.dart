@@ -11,13 +11,104 @@ import 'dart:io';
 import 'dart:async';
 import '../utils/websocket_controller.dart';
 import '../utils/sonar_repository.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-Future<Weather> fetchWeather() async {
-  final response = await http.get(
-    Uri.parse(
-      'https://api.open-meteo.com/v1/forecast?latitude=29.7977&longitude=-93.3251&hourly=temperature_2m,rain,showers,cloud_cover,sunshine_duration&timezone=America%2FChicago&wind_speed_unit=mph&temperature_unit=fahrenheit&precipitation_unit=inch&forecast_hours=24',
-    ),
+class WeatherLocation {
+  final String name;
+  final double latitude;
+  final double longitude;
+  final String timezone;
+
+  const WeatherLocation({
+    required this.name,
+    required this.latitude,
+    required this.longitude,
+    required this.timezone,
+  });
+}
+
+const defaultWeatherLocation = WeatherLocation(
+  name: '29.80, -93.33',
+  latitude: 29.7977,
+  longitude: -93.3251,
+  timezone: 'America/Chicago',
+);
+
+const _weatherLatKey = 'weather_location_lat';
+const _weatherLonKey = 'weather_location_lon';
+const _weatherTzKey = 'weather_location_tz';
+const _weatherNameKey = 'weather_location_name';
+
+Future<WeatherLocation> loadSavedWeatherLocation() async {
+  final prefs = await SharedPreferences.getInstance();
+  final lat = prefs.getDouble(_weatherLatKey);
+  final lon = prefs.getDouble(_weatherLonKey);
+
+  if (lat == null || lon == null) return defaultWeatherLocation;
+
+  return WeatherLocation(
+    name: prefs.getString(_weatherNameKey) ?? '$lat, $lon',
+    latitude: lat,
+    longitude: lon,
+    timezone: prefs.getString(_weatherTzKey) ?? 'auto',
   );
+}
+
+Future<void> saveWeatherLocation(WeatherLocation location) async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setDouble(_weatherLatKey, location.latitude);
+  await prefs.setDouble(_weatherLonKey, location.longitude);
+  await prefs.setString(_weatherTzKey, location.timezone);
+  await prefs.setString(_weatherNameKey, location.name);
+}
+
+Future<List<WeatherLocation>> searchWeatherLocations(String query) async {
+  final uri = Uri.https('geocoding-api.open-meteo.com', '/v1/search', {
+    'name': query,
+    'count': '5',
+    'language': 'en',
+    'format': 'json',
+  });
+
+  final response = await http.get(uri);
+
+  if (response.statusCode != 200) {
+    throw Exception('Failed to search locations');
+  }
+
+  final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+  final results = decoded['results'] as List<dynamic>?;
+  if (results == null) return [];
+
+  return results.map((raw) {
+    final result = raw as Map<String, dynamic>;
+    final nameParts = [result['name'], result['admin1'], result['country']]
+        .whereType<String>()
+        .where((part) => part.isNotEmpty)
+        .toList();
+
+    return WeatherLocation(
+      name: nameParts.join(', '),
+      latitude: (result['latitude'] as num).toDouble(),
+      longitude: (result['longitude'] as num).toDouble(),
+      timezone: (result['timezone'] as String?) ?? 'auto',
+    );
+  }).toList();
+}
+
+Future<Weather> fetchWeather(WeatherLocation location) async {
+  final uri = Uri.https('api.open-meteo.com', '/v1/forecast', {
+    'latitude': location.latitude.toString(),
+    'longitude': location.longitude.toString(),
+    'hourly': 'temperature_2m,rain,showers,cloud_cover,sunshine_duration',
+    'timezone': location.timezone,
+    'wind_speed_unit': 'mph',
+    'temperature_unit': 'fahrenheit',
+    'precipitation_unit': 'inch',
+    'forecast_hours': '24',
+  });
+
+  final response = await http.get(uri);
 
   if (response.statusCode == 200) {
     return Weather.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
@@ -81,6 +172,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   String deviceId = "controllerFlutter";
   late Future<Weather> futureWeather;
+  WeatherLocation weatherLocation = defaultWeatherLocation;
   String selectedMetric = 'Temperature (°F)';
   List<double> selectedData = [];
   late WebSocketService ws;
@@ -176,10 +268,32 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    futureWeather = fetchWeather();
+    futureWeather = loadSavedWeatherLocation().then((location) {
+      weatherLocation = location;
+      return fetchWeather(location);
+    });
     ws = WebSocketService(deviceId: deviceId);
     _attemptConnection();
     _loadSonars();
+  }
+
+  Future<void> _changeWeatherLocation() async {
+    final selected = await showModalBottomSheet<WeatherLocation>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => const _LocationSearchSheet(),
+    );
+
+    if (selected == null) return;
+
+    await saveWeatherLocation(selected);
+    if (!mounted) return;
+
+    setState(() {
+      weatherLocation = selected;
+      selectedData = [];
+      futureWeather = fetchWeather(selected);
+    });
   }
 
   Future<void> _loadSonars() async {
@@ -334,16 +448,50 @@ class _HomeScreenState extends State<HomeScreen> {
             else
               _buildSonarCarousel(),
             const SizedBox(height: 10),
-            const Padding(
-              padding: EdgeInsets.only(left: 4, bottom: 8),
-              child: Text(
-                'WEATHER CONDITIONS',
-                style: TextStyle(
-                  color: Colors.grey,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                  letterSpacing: 1.2,
-                ),
+            Padding(
+              padding: const EdgeInsets.only(left: 4, bottom: 8, right: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'WEATHER CONDITIONS',
+                    style: TextStyle(
+                      color: Colors.grey,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  InkWell(
+                    onTap: _changeWeatherLocation,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 2,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.location_on,
+                            size: 14,
+                            color: Colors.blue,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            weatherLocation.name,
+                            style: const TextStyle(
+                              color: Colors.blue,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
 
@@ -605,6 +753,118 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _LocationSearchSheet extends StatefulWidget {
+  const _LocationSearchSheet();
+
+  @override
+  State<_LocationSearchSheet> createState() => _LocationSearchSheetState();
+}
+
+class _LocationSearchSheetState extends State<_LocationSearchSheet> {
+  final _controller = TextEditingController();
+  List<WeatherLocation> _results = [];
+  bool _loading = false;
+  String? _error;
+
+  Future<void> _search() async {
+    final query = _controller.text.trim();
+    if (query.isEmpty) return;
+
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final results = await searchWeatherLocations(query);
+      if (!mounted) return;
+      setState(() => _results = results);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = 'Search failed. Please try again.');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 16,
+        right: 16,
+        top: 16,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Set Weather Location',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _controller,
+                  autofocus: true,
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: (_) => _search(),
+                  decoration: const InputDecoration(
+                    hintText: 'City name (e.g. Port Arthur, TX)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton(
+                onPressed: _loading ? null : _search,
+                child: const Text('Search'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (_loading) const Center(child: CircularProgressIndicator()),
+          if (_error != null)
+            Text(_error!, style: const TextStyle(color: Colors.red)),
+          if (!_loading && _results.isEmpty && _error == null)
+            const Text(
+              'Search for a city to set the weather location.',
+              style: TextStyle(color: Colors.grey),
+            ),
+          Flexible(
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: _results.length,
+              itemBuilder: (context, index) {
+                final result = _results[index];
+                return ListTile(
+                  leading: const Icon(Icons.location_on_outlined),
+                  title: Text(result.name),
+                  subtitle: Text(
+                    '${result.latitude.toStringAsFixed(2)}, '
+                    '${result.longitude.toStringAsFixed(2)}',
+                  ),
+                  onTap: () => Navigator.pop(context, result),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

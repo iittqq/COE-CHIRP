@@ -115,6 +115,70 @@ class _CompareScansPageState extends State<CompareScansPage> {
         .toList();
   }
 
+  List<List<FlSpot>> _splitSpotsAtGaps(List<FlSpot> spots) {
+    if (spots.length < 3) return [spots];
+
+    final deltas = <double>[];
+    for (var i = 1; i < spots.length; i++) {
+      deltas.add(spots[i].x - spots[i - 1].x);
+    }
+
+    final sortedDeltas = [...deltas]..sort();
+    final median = sortedDeltas[sortedDeltas.length ~/ 2];
+    final threshold = median * 3.0 < 1.0 ? 1.0 : median * 3.0;
+
+    final segments = <List<FlSpot>>[];
+    var current = <FlSpot>[spots.first];
+
+    for (var i = 1; i < spots.length; i++) {
+      if (deltas[i - 1] > threshold) {
+        segments.add(current);
+        current = <FlSpot>[];
+      }
+      current.add(spots[i]);
+    }
+    segments.add(current);
+
+    return segments;
+  }
+
+  double _niceBottomStep(double xRange, double fullWidth) {
+    const candidates = [
+      5.0,
+      10.0,
+      15.0,
+      20.0,
+      30.0,
+      45.0,
+      60.0,
+      90.0,
+      120.0,
+      180.0,
+      240.0,
+      300.0,
+      450.0,
+      600.0,
+      900.0,
+      1200.0,
+      1800.0,
+      2700.0,
+      3600.0,
+      5400.0,
+      7200.0,
+      10800.0,
+    ];
+    const targetPxPerLabel = 65.0;
+
+    final pxPerSecond = fullWidth / xRange;
+    final minStepForSpacing = targetPxPerLabel / pxPerSecond;
+
+    for (final step in candidates) {
+      if (step >= minStepForSpacing) return step;
+    }
+
+    return candidates.last;
+  }
+
   Widget _xTick(double value, TitleMeta meta) {
     if ((value - meta.min).abs() < 0.01) {
       return const SizedBox.shrink();
@@ -233,14 +297,6 @@ class _CompareScansPageState extends State<CompareScansPage> {
 
     final xRange = (maxX - minX).abs();
 
-    final bottomStep = xRange <= 60
-        ? 10.0
-        : xRange <= 180
-        ? 30.0
-        : xRange <= 600
-        ? 60.0
-        : 120.0;
-
     const leftStep = 10.0;
     const graphHeight = 260.0;
 
@@ -248,18 +304,22 @@ class _CompareScansPageState extends State<CompareScansPage> {
       height: 320,
       child: LayoutBuilder(
         builder: (context, constraints) {
-          const beforeScroll = 300.0;
+          const minPxPerSecond = 8.0;
+          const minPxPerPoint = 3.0;
+          const maxFullWidth = 20000.0;
           final baseWidth = constraints.maxWidth - 52;
           final seenWidth = baseWidth < 220 ? 220.0 : baseWidth;
 
           double fullWidth = seenWidth;
-          if (xRange > beforeScroll) {
-            fullWidth = seenWidth * (xRange / beforeScroll);
-          }
+          fullWidth = fullWidth < xRange * minPxPerSecond
+              ? xRange * minPxPerSecond
+              : fullWidth;
+          fullWidth = fullWidth < graphSpots.length * minPxPerPoint
+              ? graphSpots.length * minPxPerPoint
+              : fullWidth;
+          if (fullWidth > maxFullWidth) fullWidth = maxFullWidth;
 
-          if (fullWidth < seenWidth) {
-            fullWidth = seenWidth;
-          }
+          final bottomStep = _niceBottomStep(xRange, fullWidth);
 
           return Column(
             children: [
@@ -320,6 +380,22 @@ class _CompareScansPageState extends State<CompareScansPage> {
                                     color: const Color(0xFFD1D5DB),
                                   ),
                                 ),
+                                lineTouchData: LineTouchData(
+                                  touchTooltipData: LineTouchTooltipData(
+                                    getTooltipItems: (touchedSpots) {
+                                      return touchedSpots.map((spot) {
+                                        return LineTooltipItem(
+                                          '${(-spot.y).toStringAsFixed(2)} cm',
+                                          const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 12,
+                                          ),
+                                        );
+                                      }).toList();
+                                    },
+                                  ),
+                                ),
                                 titlesData: FlTitlesData(
                                   topTitles: const AxisTitles(
                                     sideTitles: SideTitles(showTitles: false),
@@ -372,16 +448,20 @@ class _CompareScansPageState extends State<CompareScansPage> {
       final spots = _graphSpots(widget.scans[i].bathymetryRows);
       if (spots.isEmpty) continue;
 
-      bars.add(
-        LineChartBarData(
-          spots: spots,
-          isCurved: true,
-          barWidth: 2,
-          color: _colors[i % _colors.length],
-          dotData: const FlDotData(show: false),
-          belowBarData: BarAreaData(show: false),
-        ),
-      );
+      final color = _colors[i % _colors.length];
+
+      for (final segment in _splitSpotsAtGaps(spots)) {
+        bars.add(
+          LineChartBarData(
+            spots: segment,
+            isCurved: true,
+            barWidth: 2,
+            color: color,
+            dotData: const FlDotData(show: false),
+            belowBarData: BarAreaData(show: false),
+          ),
+        );
+      }
     }
 
     return _graphWrap(
