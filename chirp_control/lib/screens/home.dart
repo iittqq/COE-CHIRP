@@ -11,6 +11,7 @@ import 'dart:io';
 import 'dart:async';
 import '../utils/websocket_controller.dart';
 import '../utils/sonar_repository.dart';
+import '../utils/alert_prefs.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class WeatherLocation {
@@ -183,6 +184,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   List<Map<String, String>> _registeredSonars = [];
   bool _sonarLoading = true;
+  bool _sonarAlertsEnabled = true;
 
   final Map<String, SystemStatus> _sonarStatuses = {};
   final Map<String, Timer> _pingTimeoutTimers = {};
@@ -212,7 +214,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
           _pingAllSonars();
         })
-        .catchError((e) => _handleDisconnection());
+        .catchError((e) {
+          _handleDisconnection();
+        });
   }
 
   void _handleIncomingMessage(dynamic data) {
@@ -250,12 +254,15 @@ class _HomeScreenState extends State<HomeScreen> {
   void _sendPingFor(String sonarId) {
     if (_connectionStatus != WebSocketConnectionStatus.connected) return;
 
+    final wasOnline = _sonarStatuses[sonarId] == SystemStatus.online;
+
     setState(() => _sonarStatuses[sonarId] = SystemStatus.connecting);
 
     _pingTimeoutTimers.remove(sonarId)?.cancel();
     _pingTimeoutTimers[sonarId] = Timer(_pingTimeout, () {
       if (!mounted) return;
       setState(() => _sonarStatuses[sonarId] = SystemStatus.offline);
+      if (wasOnline) _notifySonarOffline(sonarId);
     });
 
     ws.sendCommand({
@@ -275,6 +282,22 @@ class _HomeScreenState extends State<HomeScreen> {
     ws = WebSocketService(deviceId: deviceId);
     _attemptConnection();
     _loadSonars();
+    SonarRepository.sonarsChanged.addListener(_loadSonars);
+    loadSonarAlertsEnabled().then((value) {
+      if (mounted) setState(() => _sonarAlertsEnabled = value);
+    });
+  }
+
+  void _notifySonarOffline(String sonarId) {
+    if (!mounted || !_sonarAlertsEnabled) return;
+    final match = _registeredSonars.firstWhere(
+      (s) => s['sonar_id'] == sonarId,
+      orElse: () => {'name': sonarId},
+    );
+    final name = match['name'] ?? sonarId;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('$name went offline')));
   }
 
   Future<void> _changeWeatherLocation() async {
@@ -313,6 +336,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    SonarRepository.sonarsChanged.removeListener(_loadSonars);
     _reconnectTimer?.cancel();
     for (final timer in _pingTimeoutTimers.values) {
       timer.cancel();
@@ -325,6 +349,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _handleDisconnection() {
     if (!mounted) return;
+    final anyWasOnline = _sonarStatuses.values.any(
+      (s) => s == SystemStatus.online,
+    );
     setState(() {
       _connectionStatus = WebSocketConnectionStatus.disconnected;
       for (final timer in _pingTimeoutTimers.values) {
@@ -333,6 +360,12 @@ class _HomeScreenState extends State<HomeScreen> {
       _pingTimeoutTimers.clear();
       _sonarStatuses.updateAll((_, _) => SystemStatus.offline);
     });
+
+    if (anyWasOnline && _sonarAlertsEnabled && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Connection lost. Sonars marked offline.')),
+      );
+    }
 
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(const Duration(seconds: 5), () {
@@ -366,9 +399,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _importFolder() async {
-    PermissionStatus status;
-
+    // iOS's document picker handles its own access grant; permission_handler's
+    // Permission.storage doesn't map to anything meaningful there and can
+    // block the flow if it resolves to denied.
     if (Platform.isAndroid) {
+      PermissionStatus status;
       if (await Permission.storage.isGranted) {
         status = PermissionStatus.granted;
       } else {
@@ -378,9 +413,6 @@ class _HomeScreenState extends State<HomeScreen> {
           return;
         }
       }
-    } else {
-      status = await Permission.storage.request();
-      if (!status.isGranted) return;
     }
 
     final result = await FilePicker.getDirectoryPath();
@@ -399,10 +431,54 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (await dest.exists()) {
+      if (!mounted) return;
+      final overwrite = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Scan already exists'),
+          content: Text(
+            'A scan named "${dest.path.split(Platform.pathSeparator).last}" '
+            'already exists. Importing will overwrite it and its data cannot '
+            'be recovered.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text(
+                'Overwrite',
+                style: TextStyle(color: Colors.red),
+              ),
+            ),
+          ],
+        ),
+      );
+
+      if (overwrite != true) return;
       await dest.delete(recursive: true);
     }
 
     await _copyDirectory(pickedDir, dest);
+
+    final hasSonar = await File('${dest.path}/sonar.csv').exists();
+    final hasBathymetry = await File('${dest.path}/bathymetry.csv').exists();
+
+    if (!hasSonar && !hasBathymetry) {
+      await dest.delete(recursive: true);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Import failed: folder did not contain sonar.csv or bathymetry.csv.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -504,7 +580,35 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: const Center(child: CircularProgressIndicator()),
                   );
                 } else if (snapshot.hasError) {
-                  return Text('${snapshot.error}');
+                  return SizedBox(
+                    height: MediaQuery.of(context).size.height / 3 + 60,
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.cloud_off,
+                            size: 40,
+                            color: Colors.grey.shade400,
+                          ),
+                          const SizedBox(height: 12),
+                          const Text(
+                            "Couldn't load weather data.",
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                          const SizedBox(height: 16),
+                          ElevatedButton(
+                            onPressed: () {
+                              setState(() {
+                                futureWeather = fetchWeather(weatherLocation);
+                              });
+                            },
+                            child: const Text('Retry'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
                 } else if (snapshot.hasData) {
                   final weather = snapshot.data!;
                   if (selectedData.isEmpty) {
@@ -625,7 +729,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         SizedBox(
-          height: 150,
+          // Tall enough for the card's own countdown row (always rendered
+          // now, even with showHeader: false) plus its content.
+          height: 168,
           child: PageView.builder(
             controller: _sonarPageController,
             itemCount: _registeredSonars.length,

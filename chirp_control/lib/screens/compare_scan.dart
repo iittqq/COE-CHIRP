@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:ionicons_plus/ionicons_plus.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../utils/scan_repo.dart';
+import '../utils/units_repository.dart';
 
 class CompareScansPage extends StatefulWidget {
   final List<ScanData> scans;
@@ -14,6 +15,7 @@ class CompareScansPage extends StatefulWidget {
 
 class _CompareScansPageState extends State<CompareScansPage> {
   final ScrollController _scrollCtrl = ScrollController();
+  bool _isMetric = true;
 
   final List<Color> _colors = const [
     Color(0xFF1F77B4),
@@ -22,6 +24,14 @@ class _CompareScansPageState extends State<CompareScansPage> {
     Color(0xFFD62728),
     Color(0xFF9467BD),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    loadIsMetric().then((value) {
+      if (mounted) setState(() => _isMetric = value);
+    });
+  }
 
   @override
   void dispose() {
@@ -50,7 +60,7 @@ class _CompareScansPageState extends State<CompareScansPage> {
       final depthMeters = _toDouble(row[2]);
       if (depthMeters == null) continue;
 
-      vals.add(depthMeters * 100);
+      vals.add(cmToDisplayUnit(depthMeters * 100, _isMetric));
     }
 
     if (vals.isEmpty) return null;
@@ -101,8 +111,8 @@ class _CompareScansPageState extends State<CompareScansPage> {
 
       if (depthMeters == null || timestampMs == null) continue;
 
-      final depthCm = depthMeters * 100;
-      points.add(FlSpot(timestampMs, depthCm));
+      final depthDisplay = cmToDisplayUnit(depthMeters * 100, _isMetric);
+      points.add(FlSpot(timestampMs, depthDisplay));
     }
 
     if (points.isEmpty) return [];
@@ -385,7 +395,7 @@ class _CompareScansPageState extends State<CompareScansPage> {
                                     getTooltipItems: (touchedSpots) {
                                       return touchedSpots.map((spot) {
                                         return LineTooltipItem(
-                                          '${(-spot.y).toStringAsFixed(2)} cm',
+                                          '${(-spot.y).toStringAsFixed(2)} ${depthUnitLabel(_isMetric)}',
                                           const TextStyle(
                                             color: Colors.white,
                                             fontWeight: FontWeight.w700,
@@ -468,7 +478,7 @@ class _CompareScansPageState extends State<CompareScansPage> {
       bars: bars,
       emptyText: "No bathymetry chart data",
       xLabel: "Scan Duration (mm:ss)",
-      yLabel: "Depth (cm)",
+      yLabel: "Depth (${depthUnitLabel(_isMetric)})",
     );
   }
 
@@ -495,7 +505,9 @@ class _CompareScansPageState extends State<CompareScansPage> {
           ),
           const SizedBox(height: 8),
           Text(
-            change != null ? "${change.toStringAsFixed(2)} cm" : "—",
+            change != null
+                ? "${change.toStringAsFixed(2)} ${depthUnitLabel(_isMetric)}"
+                : "—",
             style: const TextStyle(
               fontSize: 24,
               fontWeight: FontWeight.w800,
@@ -503,48 +515,53 @@ class _CompareScansPageState extends State<CompareScansPage> {
             ),
           ),
           const SizedBox(height: 12),
-          ...widget.scans.asMap().entries.map((entry) {
-            final i = entry.key;
-            final scan = entry.value;
-            final settled = _calcSettledDepth(scan.bathymetryRows);
-            final color = _colors[i % _colors.length];
+          for (final entry in widget.scans.asMap().entries)
+            Builder(
+              builder: (context) {
+                final i = entry.key;
+                final scan = entry.value;
+                final settled = _calcSettledDepth(scan.bathymetryRows);
+                final color = _colors[i % _colors.length];
 
-            return Padding(
-              padding: EdgeInsets.only(
-                bottom: i == widget.scans.length - 1 ? 0 : 10,
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      color: color,
-                      borderRadius: BorderRadius.circular(99),
-                    ),
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: i == widget.scans.length - 1 ? 0 : 10,
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      scan.title,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF374151),
-                        fontWeight: FontWeight.w700,
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: color,
+                          borderRadius: BorderRadius.circular(99),
+                        ),
                       ),
-                    ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          scan.title,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF374151),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        settled != null
+                            ? "${settled.toStringAsFixed(2)} ${depthUnitLabel(_isMetric)}"
+                            : "—",
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
                   ),
-                  Text(
-                    settled != null ? "${settled.toStringAsFixed(2)} cm" : "—",
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }).toList(),
+                );
+              },
+            ),
         ],
       ),
     );
@@ -585,35 +602,6 @@ class _CompareScansPageState extends State<CompareScansPage> {
     );
   }
 
-  Widget _notesBox() {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: Column(
-        children: [
-          TextField(
-            maxLines: 4,
-            decoration: const InputDecoration(
-              hintText: "Notes, site conditions, issues...",
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 12),
-          ElevatedButton(
-            onPressed: () {
-              FocusScope.of(context).unfocus();
-            },
-            child: const Text("Save Note"),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -633,7 +621,9 @@ class _CompareScansPageState extends State<CompareScansPage> {
         actions: [
           IconButton(
             icon: const Icon(Ionicons.share_outline),
-            onPressed: () {},
+            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Sharing isn't available yet.")),
+            ),
           ),
         ],
         shape: const Border(
@@ -655,19 +645,6 @@ class _CompareScansPageState extends State<CompareScansPage> {
             subtitle: "Bathymetry depth over scan time",
             child: _buildChart(),
           ),
-          const SizedBox(height: 14),
-          Row(
-            children: const [
-              Text(
-                "Notes",
-                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
-              ),
-              Spacer(),
-              Icon(Ionicons.menu_outline, size: 18),
-            ],
-          ),
-          const SizedBox(height: 10),
-          _notesBox(),
           const SizedBox(height: 30),
         ],
       ),

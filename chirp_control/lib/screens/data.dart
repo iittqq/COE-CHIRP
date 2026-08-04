@@ -204,25 +204,26 @@ class _HistoryPageState extends State<HistoryPage> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F6FA),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        centerTitle: true,
-        shape: const Border(
-          bottom: BorderSide(color: Color(0xFFE5E7EB), width: 1),
-        ),
-        leading: IconButton(
-          onPressed: importScan,
-          icon: const Icon(Icons.upload_file, color: Color(0xFF2563EB)),
-        ),
-        title: Text(
-          selecting ? "${picked.length} Selected" : "PAST SCANS HISTORY",
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-        ),
-        actions: [
+  Widget _buildHeader() {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB), width: 1)),
+      ),
+      padding: const EdgeInsets.only(left: 4, right: 8, bottom: 4),
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: importScan,
+            icon: const Icon(Icons.upload_file, color: Color(0xFF2563EB)),
+          ),
+          Expanded(
+            child: Text(
+              selecting ? "${picked.length} Selected" : "PAST SCANS HISTORY",
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+            ),
+          ),
           TextButton(
             onPressed: toggleSelect,
             child: Text(
@@ -235,118 +236,131 @@ class _HistoryPageState extends State<HistoryPage> {
             ),
           ),
         ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(60),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(15, 0, 15, 10),
-            child: Container(
-              height: 40,
-              decoration: BoxDecoration(
-                color: const Color(0xFFF1F3F5),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey),
-              ),
-              child: Row(
-                children: [
-                  const SizedBox(width: 15),
-                  const Icon(Ionicons.search_outline, color: Color(0xFF9CA3AF)),
-                  const SizedBox(width: 15),
-                  Expanded(
-                    child: TextField(
-                      onChanged: (value) {
-                        setState(() {
-                          searchText = value;
-                        });
-                      },
-                      decoration: const InputDecoration(
-                        hintText: "Search by date or location",
-                        hintStyle: TextStyle(
-                          color: Color(0xFF9CA3AF),
-                          fontSize: 15,
-                        ),
-                        border: InputBorder.none,
-                        contentPadding: EdgeInsets.symmetric(vertical: 10),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
       ),
-      body: FutureBuilder<List<ScanData>>(
-        future: futureScans,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
+    );
+  }
 
-          if (snapshot.hasError) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  'Error: ${snapshot.error}',
-                  textAlign: TextAlign.center,
+  Widget _buildSearchBar() {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(15, 0, 15, 10),
+      child: Container(
+        height: 40,
+        decoration: BoxDecoration(
+          color: const Color(0xFFF1F3F5),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey),
+        ),
+        child: Row(
+          children: [
+            const SizedBox(width: 15),
+            const Icon(Ionicons.search_outline, color: Color(0xFF9CA3AF)),
+            const SizedBox(width: 15),
+            Expanded(
+              child: TextField(
+                onChanged: (value) {
+                  setState(() {
+                    searchText = value;
+                  });
+                },
+                decoration: const InputDecoration(
+                  hintText: "Search by date or location",
+                  hintStyle: TextStyle(color: Color(0xFF9CA3AF), fontSize: 15),
+                  border: InputBorder.none,
+                  contentPadding: EdgeInsets.symmetric(vertical: 10),
                 ),
               ),
-            );
-          }
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-          allScans = snapshot.data ?? [];
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F6FA),
+      body: Column(
+        children: [
+          _buildHeader(),
+          _buildSearchBar(),
+          Expanded(
+            child: FutureBuilder<List<ScanData>>(
+              future: futureScans,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
 
-          final filtered = allScans.where((scan) {
-            final q = searchText.trim().toLowerCase();
-            if (q.isEmpty) return true;
+                if (snapshot.hasError) {
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text(
+                        'Error: ${snapshot.error}',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  );
+                }
 
-            return scan.title.toLowerCase().contains(q) ||
-                scan.location.toLowerCase().contains(q) ||
-                scan.time.toLowerCase().contains(q) ||
-                scan.duration.toLowerCase().contains(q);
-          }).toList();
+                allScans = snapshot.data ?? [];
 
-          if (allScans.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Text('No scans found.', style: TextStyle(fontSize: 16)),
-                  const SizedBox(height: 12),
-                  ElevatedButton.icon(
-                    onPressed: importScan,
-                    icon: const Icon(Icons.upload_file),
-                    label: const Text('Import Scan'),
-                  ),
-                ],
-              ),
-            );
-          }
+                final filtered = allScans.where((scan) {
+                  final q = searchText.trim().toLowerCase();
+                  if (q.isEmpty) return true;
 
-          return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 120),
-            children: [
-              const SizedBox(height: 12),
-              ...filtered.map((scan) {
-                final i = allScans.indexOf(scan);
+                  return scan.title.toLowerCase().contains(q) ||
+                      scan.location.toLowerCase().contains(q) ||
+                      scan.time.toLowerCase().contains(q) ||
+                      scan.duration.toLowerCase().contains(q);
+                }).toList();
 
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: _ScanCard(
-                    title: scan.title,
-                    location: scan.location,
-                    timeText: scan.time,
-                    duration: scan.duration,
-                    selecting: selecting,
-                    chosen: picked.contains(i),
-                    onTap: () => selectScan(i),
-                  ),
+                if (allScans.isEmpty) {
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text(
+                          'No scans found.',
+                          style: TextStyle(fontSize: 16),
+                        ),
+                        const SizedBox(height: 12),
+                        ElevatedButton.icon(
+                          onPressed: importScan,
+                          icon: const Icon(Icons.upload_file),
+                          label: const Text('Import Scan'),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                return ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 120),
+                  children: [
+                    const SizedBox(height: 12),
+                    for (final scan in filtered)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: _ScanCard(
+                          title: scan.title,
+                          location: scan.location,
+                          timeText: scan.time,
+                          duration: scan.duration,
+                          selecting: selecting,
+                          chosen: picked.contains(allScans.indexOf(scan)),
+                          onTap: () => selectScan(allScans.indexOf(scan)),
+                        ),
+                      ),
+                    const SizedBox(height: 20),
+                  ],
                 );
-              }).toList(),
-              const SizedBox(height: 20),
-            ],
-          );
-        },
+              },
+            ),
+          ),
+        ],
       ),
       bottomNavigationBar: selecting && picked.isNotEmpty
           ? SafeArea(

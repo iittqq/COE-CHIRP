@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:ionicons_plus/ionicons_plus.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../utils/scan_repo.dart';
+import '../utils/units_repository.dart';
 
 class ScanAnalysisPage extends StatefulWidget {
   final ScanData scan;
@@ -14,10 +15,23 @@ class ScanAnalysisPage extends StatefulWidget {
 
 class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
   final ScrollController _scrollCtrl = ScrollController();
+  final TextEditingController _notesCtrl = TextEditingController();
+  bool _isMetric = true;
+  bool _savingNote = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _notesCtrl.text = widget.scan.notes;
+    loadIsMetric().then((value) {
+      if (mounted) setState(() => _isMetric = value);
+    });
+  }
 
   @override
   void dispose() {
     _scrollCtrl.dispose();
+    _notesCtrl.dispose();
     super.dispose();
   }
 
@@ -42,7 +56,7 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
       final depthMeters = _toDouble(row[2]);
       if (depthMeters == null) continue;
 
-      depthValues.add(depthMeters * 100);
+      depthValues.add(cmToDisplayUnit(depthMeters * 100, _isMetric));
     }
 
     if (depthValues.isEmpty) return null;
@@ -67,8 +81,8 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
 
       if (depthMeters == null || timestampMs == null) continue;
 
-      final depthCm = depthMeters * 100;
-      points.add(FlSpot(timestampMs, depthCm));
+      final depthDisplay = cmToDisplayUnit(depthMeters * 100, _isMetric);
+      points.add(FlSpot(timestampMs, depthDisplay));
     }
 
     if (points.isEmpty) return [];
@@ -106,6 +120,30 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
     segments.add(current);
 
     return segments;
+  }
+
+  double _niceLeftStep(double yRange) {
+    const candidates = [
+      1.0,
+      2.0,
+      5.0,
+      10.0,
+      20.0,
+      25.0,
+      50.0,
+      100.0,
+      200.0,
+      250.0,
+      500.0,
+      1000.0,
+    ];
+    const targetTicks = 6.0;
+
+    for (final step in candidates) {
+      if (yRange / step <= targetTicks) return step;
+    }
+
+    return candidates.last;
   }
 
   double _niceBottomStep(double xRange, double fullWidth) {
@@ -259,7 +297,7 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
 
     final xRange = (maxX - minX).abs();
 
-    const leftStep = 10.0;
+    final leftStep = _niceLeftStep(maxY - minY);
     const graphHeight = 260.0;
 
     return SizedBox(
@@ -347,7 +385,7 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
                                     getTooltipItems: (touchedSpots) {
                                       return touchedSpots.map((spot) {
                                         return LineTooltipItem(
-                                          '${(-spot.y).toStringAsFixed(2)} cm',
+                                          '${(-spot.y).toStringAsFixed(2)} ${depthUnitLabel(_isMetric)}',
                                           const TextStyle(
                                             color: Colors.white,
                                             fontWeight: FontWeight.w700,
@@ -446,7 +484,7 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
             ),
             const SizedBox(height: 4),
             Text(
-              '$label (cm)',
+              '$label (${depthUnitLabel(_isMetric)})',
               style: const TextStyle(
                 fontSize: 12,
                 color: Color(0xFF6B7280),
@@ -482,7 +520,7 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
       spots: spots,
       emptyText: "No bathymetry chart data",
       xLabel: "Scan Duration (mm:ss)",
-      yLabel: "Depth (cm)",
+      yLabel: "Depth (${depthUnitLabel(_isMetric)})",
     );
   }
 
@@ -507,7 +545,9 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
         actions: [
           IconButton(
             icon: const Icon(Ionicons.share_outline),
-            onPressed: () {},
+            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Sharing isn't available yet.")),
+            ),
           ),
         ],
         shape: const Border(
@@ -532,15 +572,9 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
             child: _depthChart(bathymetryRows),
           ),
           const SizedBox(height: 14),
-          Row(
-            children: const [
-              Text(
-                "Notes",
-                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
-              ),
-              Spacer(),
-              Icon(Ionicons.menu_outline, size: 18),
-            ],
+          const Text(
+            "Notes",
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
           ),
           const SizedBox(height: 10),
           _notesBox(),
@@ -626,6 +660,25 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
     );
   }
 
+  Future<void> _saveNote() async {
+    FocusScope.of(context).unfocus();
+    setState(() => _savingNote = true);
+    try {
+      await ScanRepository.saveNotes(widget.scan, _notesCtrl.text);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Note saved')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to save note: $e')));
+    } finally {
+      if (mounted) setState(() => _savingNote = false);
+    }
+  }
+
   Widget _notesBox() {
     return Container(
       padding: const EdgeInsets.all(14),
@@ -637,6 +690,7 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
       child: Column(
         children: [
           TextField(
+            controller: _notesCtrl,
             maxLines: 4,
             decoration: const InputDecoration(
               hintText: "Notes, site conditions, issues...",
@@ -645,10 +699,14 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
           ),
           const SizedBox(height: 12),
           ElevatedButton(
-            onPressed: () {
-              FocusScope.of(context).unfocus();
-            },
-            child: const Text("Save Note"),
+            onPressed: _savingNote ? null : _saveNote,
+            child: _savingNote
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text("Save Note"),
           ),
         ],
       ),

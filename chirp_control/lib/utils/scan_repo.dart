@@ -13,6 +13,7 @@ class ScanData {
   final String location;
   final String time;
   final String duration;
+  final String notes;
 
   ScanData({
     required this.folderName,
@@ -23,6 +24,7 @@ class ScanData {
     required this.location,
     required this.time,
     required this.duration,
+    required this.notes,
   });
 }
 
@@ -196,6 +198,7 @@ class ScanRepository {
 
       final savedTitle = (metadata['title'] ?? '').toString().trim();
       final savedLocation = (metadata['location'] ?? '').toString().trim();
+      final savedNotes = (metadata['notes'] ?? '').toString();
 
       scans.add(
         ScanData(
@@ -209,6 +212,7 @@ class ScanRepository {
           location: savedLocation.isNotEmpty ? savedLocation : 'SITE A',
           time: formattedTime,
           duration: formattedDuration,
+          notes: savedNotes,
         ),
       );
     }
@@ -222,6 +226,10 @@ class ScanRepository {
     if (trimmed.isEmpty) return;
 
     await _writeMetadata(scan.folder, {'title': trimmed});
+  }
+
+  static Future<void> saveNotes(ScanData scan, String notes) async {
+    await _writeMetadata(scan.folder, {'notes': notes});
   }
 
   static Future<void> deleteScan(ScanData scan) async {

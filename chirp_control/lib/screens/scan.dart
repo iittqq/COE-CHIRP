@@ -1,13 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/websocket_controller.dart';
 import '../utils/sonar_repository.dart';
+import '../utils/alert_prefs.dart';
 import 'dart:io';
 import 'package:xml/xml.dart';
 import 'package:chirp_control/components/scan_duration_input.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../components/system_status_card.dart';
+
+const _automationInProgressKey = 'automation_in_progress';
+const _automationSonarNameKey = 'automation_in_progress_sonar_name';
+const _automationSonarIdKey = 'automation_in_progress_sonar_id';
 
 enum WebSocketConnectionStatus { disconnected, connecting, connected }
 
@@ -48,13 +54,28 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
   bool usbSwitchOn = true;
 
   Timer? _automationTimer;
-  int _selectedTotalSeconds = 0;
   Duration _remainingDuration = Duration.zero;
   Duration _sessionDuration = Duration.zero;
 
   bool _isSynced = false;
 
   bool _readyToFinishScan = false;
+
+  bool _cancelRequested = false;
+  bool _stalled = false;
+  bool _watchdogSuspended = false;
+  DateTime? _lastProgressAt;
+  Timer? _stallWatchdog;
+  static const _stallThreshold = Duration(seconds: 45);
+
+  bool _resumedFromInterruption = false;
+  String? _interruptedSonarName;
+  String? _interruptedSonarId;
+  bool _forcingDevicesOff = false;
+
+  bool _dredgeWarningsEnabled = true;
+  bool _shallowWarningShown = false;
+  bool _sonarAlertsEnabled = true;
 
   List<Map<String, String>> _registeredSonars = [];
   bool _sonarLoading = true;
@@ -116,7 +137,9 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
 
           _sendPing();
         })
-        .catchError((e) => _handleDisconnection());
+        .catchError((e) {
+          _handleDisconnection();
+        });
   }
 
   bool _checkDataForSuccess(dynamic data) {
@@ -147,7 +170,7 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
 
   void _sendPing() {
     if (automationRunning || _selectedSonar == null) {
-      print("Ping suppressed: Automation is currently running.");
+      debugPrint("Ping suppressed: Automation is currently running.");
       return;
     }
 
@@ -178,6 +201,222 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     _reconnectTimer?.cancel();
     ws = WebSocketService(deviceId: deviceId);
     _loadSonars();
+    SonarRepository.sonarsChanged.addListener(_loadSonars);
+    _checkForInterruptedAutomation();
+    loadDredgeWarningsEnabled().then((value) {
+      if (mounted) setState(() => _dredgeWarningsEnabled = value);
+    });
+    loadSonarAlertsEnabled().then((value) {
+      if (mounted) setState(() => _sonarAlertsEnabled = value);
+    });
+  }
+
+  void _notifyScanStarted() {
+    if (!_sonarAlertsEnabled || !mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Scan started.')));
+  }
+
+  void _notifyScanFinished() {
+    if (!_sonarAlertsEnabled || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Scan finished. Dredges can be found at maps.fishdeeper.com',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _checkForInterruptedAutomation() async {
+    final prefs = await SharedPreferences.getInstance();
+    final wasInProgress = prefs.getBool(_automationInProgressKey) ?? false;
+    if (!wasInProgress || !mounted) return;
+
+    setState(() {
+      _resumedFromInterruption = true;
+      _interruptedSonarName = prefs.getString(_automationSonarNameKey);
+      _interruptedSonarId = prefs.getString(_automationSonarIdKey);
+    });
+  }
+
+  Future<void> _setAutomationInProgress(
+    bool value, {
+    String? sonarName,
+    String? sonarId,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (value) {
+      await prefs.setBool(_automationInProgressKey, true);
+      await prefs.setString(_automationSonarNameKey, sonarName ?? '');
+      await prefs.setString(_automationSonarIdKey, sonarId ?? '');
+    } else {
+      await prefs.remove(_automationInProgressKey);
+      await prefs.remove(_automationSonarNameKey);
+      await prefs.remove(_automationSonarIdKey);
+    }
+  }
+
+  void _acknowledgeInterruption() {
+    setState(() => _resumedFromInterruption = false);
+    _setAutomationInProgress(false);
+  }
+
+  // Sends a command and waits for the UI dump the remote controller attaches
+  // to its response (every action handler in remote_control.py returns one),
+  // independent of _uiSubscription/automationRunning so it also works during
+  // recovery, before any automation is "running". Returns null on timeout.
+  Future<XmlDocument?> _sendAndAwaitUiDump(
+    Map<String, dynamic> command, {
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    final completer = Completer<XmlDocument?>();
+    late final StreamSubscription sub;
+    sub = ws.messages.listen((data) {
+      if (completer.isCompleted) return;
+      String? b64 = data['ui_state_zip_b64'] as String?;
+      if (b64 == null && data['body'] is String) {
+        try {
+          final body = json.decode(data['body']);
+          b64 = body['ui_state_zip_b64'] as String?;
+        } catch (_) {}
+      }
+      if (b64 != null) {
+        completer.complete(XmlDocument.parse(decodeZippedXml(b64)));
+      }
+    });
+
+    ws.sendCommand(command);
+    final result = await completer.future.timeout(
+      timeout,
+      onTimeout: () => null,
+    );
+    await sub.cancel();
+    return result;
+  }
+
+  // Best-effort cleanup after an interrupted automation. Can safely force-close
+  // the scan/shade apps and restore WiFi (no ambiguity there). For the Tuya
+  // power toggle, rather than guessing or requiring someone to be watching
+  // the device to check it manually (this runs unattended), it reads the
+  // switch's actual on/off state from the UI dump - uiautomator2 exposes a
+  // `checked` attribute on checkable nodes like this one - and only clicks it
+  // if that confirms it's still on. If the node or its state can't be read,
+  // it falls back to surfacing Tuya and asking the user to verify, since
+  // guessing risks turning the plug back on.
+  // Note: this deliberately does NOT wait for _connectionStatus to become
+  // `connected` — that only happens once the *remote* device confirms itself
+  // online via a ping round-trip, which is exactly what's unavailable when
+  // the remote device is the thing that's unresponsive. All this needs is the
+  // local WebSocket transport to be open so sendCommand() can push messages
+  // through; whether the remote device is listening is unknowable here.
+  Future<void> _forceDevicesOff() async {
+    final targetId = _interruptedSonarId ?? getSelectedDeviceId();
+    setState(() => _forcingDevicesOff = true);
+
+    try {
+      await ws.connect();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _forcingDevicesOff = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            "Couldn't reach the device. Check your connection and try again.",
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+
+    ws.sendCommand({
+      "action": "close",
+      "package": "eu.deeper.fishdeeper",
+      "deviceId": targetId,
+      "sender": deviceId,
+    });
+    await Future.delayed(const Duration(seconds: 1));
+
+    ws.sendCommand({
+      "action": "close",
+      "package": "com.wazombi.RISE/crc64c90e479072a4489e.DrawerMainActivity",
+      "deviceId": targetId,
+      "sender": deviceId,
+    });
+    await Future.delayed(const Duration(seconds: 1));
+
+    ws.sendCommand({
+      "action": "wifi",
+      "state": "on",
+      "deviceId": targetId,
+      "sender": deviceId,
+    });
+    await Future.delayed(const Duration(seconds: 1));
+
+    if (!mounted) return;
+
+    final tuyaDoc = await _sendAndAwaitUiDump({
+      "action": "launch",
+      "package":
+          "com.tuya.smart/com.thingclips.smart.hometab.activity.FamilyHomeActivity",
+      "deviceId": targetId,
+      "sender": deviceId,
+    });
+
+    if (!mounted) return;
+
+    String resultMessage =
+        "Closed the scan/shade apps and restored WiFi. Opened Tuya — "
+        "please verify the smart plug is off yourself, since the app "
+        "couldn't read its current state.";
+
+    if (tuyaDoc != null) {
+      final switchBtn = tuyaDoc
+          .findAllElements('node')
+          .firstWhere(
+            (n) =>
+                n.getAttribute('resource-id') ==
+                'com.tuya.smart:id/switchButton',
+            orElse: () => XmlElement(XmlName('null')),
+          );
+
+      if (switchBtn.name.local != 'null') {
+        final checked = switchBtn.getAttribute('checked');
+        if (checked == 'false') {
+          resultMessage =
+              "Closed the scan/shade apps, restored WiFi, and confirmed the "
+              "smart plug was already off.";
+        } else if (checked == 'true') {
+          await _sendAndAwaitUiDump({
+            "action": "clickByXml",
+            "xmlNode": switchBtn.toXmlString(),
+            "deviceId": targetId,
+            "sender": deviceId,
+          });
+          if (!mounted) return;
+          resultMessage =
+              "Closed the scan/shade apps, restored WiFi, and turned the "
+              "smart plug off.";
+        }
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _forcingDevicesOff = false;
+      _resumedFromInterruption = false;
+    });
+    _setAutomationInProgress(false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 6),
+        content: Text(resultMessage),
+      ),
+    );
   }
 
   Future<void> _loadSonars() async {
@@ -194,11 +433,13 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
 
   @override
   void dispose() {
+    SonarRepository.sonarsChanged.removeListener(_loadSonars);
     _hoursController.dispose();
     _minutesController.dispose();
     _secondsController.dispose();
     _delayController.dispose();
     _automationTimer?.cancel();
+    _stallWatchdog?.cancel();
     _reconnectTimer?.cancel();
     _uiSubscription?.cancel();
     ws.disconnect();
@@ -220,14 +461,16 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     _remainingDuration = _sessionDuration;
 
     _automationTimer?.cancel();
+    _suspendWatchdog();
 
     _automationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_remainingDuration.inSeconds <= 0) {
         timer.cancel();
+        _resumeWatchdog();
         setState(() {
           _readyToFinishScan = true;
           _currentState = AutoState.uploadingScan;
-          print("Automation timer finished. Ready to open menu.");
+          debugPrint("Automation timer finished. Ready to open menu.");
 
           ws.sendCommand({
             "action": "wifi",
@@ -244,7 +487,29 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     });
   }
 
+  void _checkDepthWarning(String xml) {
+    final isShallow = xml.toLowerCase().contains('too shallow');
+
+    if (!isShallow) {
+      _shallowWarningShown = false;
+      return;
+    }
+
+    if (_shallowWarningShown) return;
+    _shallowWarningShown = true;
+
+    if (!_dredgeWarningsEnabled || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Depth warning: water is too shallow.'),
+        backgroundColor: Colors.orange,
+      ),
+    );
+  }
+
   void analyzeUiXml(String xml) {
+    if (_cancelRequested) return;
+    _checkDepthWarning(xml);
     final doc = XmlDocument.parse(xml);
 
     if (_xmlUpdateCompleter != null && !_xmlUpdateCompleter!.isCompleted) {
@@ -290,30 +555,35 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
         );
 
     if (switchBtn.name.local != 'null') {
-      print("Found Tuya Switch. Toggling and moving to $nextState");
+      debugPrint("Found Tuya Switch. Toggling and moving to $nextState");
       _clickByXmlNode(switchBtn);
 
       setState(() => _currentState = nextState);
 
       if (nextState == AutoState.adjustingShade) {
         await Future.delayed(const Duration(seconds: 20));
+        if (_cancelRequested || !mounted) return;
         _launchShades();
       } else {
-        print("Starting sequential shutdown...");
+        debugPrint("Starting sequential shutdown...");
 
         await Future.delayed(const Duration(seconds: 5));
+        if (_cancelRequested || !mounted) return;
         _closeApp(packageName: "com.tuya.smart");
 
         await Future.delayed(const Duration(seconds: 5));
+        if (_cancelRequested || !mounted) return;
         _closeApp(packageName: "eu.deeper.fishdeeper");
 
         await Future.delayed(const Duration(seconds: 5));
+        if (_cancelRequested || !mounted) return;
         _closeApp(
           packageName:
               "com.wazombi.RISE/crc64c90e479072a4489e.DrawerMainActivity",
         );
 
         await Future.delayed(const Duration(seconds: 5));
+        if (_cancelRequested || !mounted) return;
         ws.sendCommand({
           "action": "wifi",
           "state": "on",
@@ -321,6 +591,8 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
           "sender": deviceId,
         });
 
+        _stopWatchdog();
+        _setAutomationInProgress(false);
         if (mounted) {
           setState(() {
             automationRunning = false;
@@ -329,7 +601,8 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
             _statusCardKey = UniqueKey();
           });
         }
-        print("Sequence Complete.");
+        _notifyScanFinished();
+        debugPrint("Sequence Complete.");
       }
     }
   }
@@ -337,7 +610,7 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
   XmlElement? _findRiseHandle(XmlDocument doc, String rawXML) {
     if (rawXML.contains("Select Device Model") ||
         rawXML.contains('content-desc="CANCEL"')) {
-      print("Detected 'Select Device' screen. Dismissing...");
+      debugPrint("Detected 'Select Device' screen. Dismissing...");
       _dismissDeviceSelect();
       return null;
     }
@@ -363,18 +636,19 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
           if (parent is XmlElement &&
               parent.getAttribute('resource-id') ==
                   'com.wazombi.RISE:id/window_control') {
-            print("Target verified at Y: $top. Avoiding status bar.");
+            debugPrint("Target verified at Y: $top. Avoiding status bar.");
             return node;
           }
         }
       }
     } catch (e) {
-      print("Handle detection error: $e");
+      debugPrint("Handle detection error: $e");
     }
     return null;
   }
 
   void _dismissDeviceSelect() {
+    _markProgress();
     ws.sendCommand({
       "action": "clickByXml",
       "xmlNode": '<node content-desc="CANCEL" />',
@@ -388,6 +662,7 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     required double endX,
     required double endY,
   }) {
+    _markProgress();
     final xmlString = node.toXmlString();
     ws.sendCommand({
       "action": "swipeByXml",
@@ -403,40 +678,44 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
   bool _isShadeSequenceRunning = false;
 
   Future<void> _handleShadeToggle(XmlDocument doc, String rawXML) async {
-    if (_currentState != AutoState.adjustingShade || _isShadeSequenceRunning)
+    if (_currentState != AutoState.adjustingShade || _isShadeSequenceRunning) {
       return;
+    }
 
     _isShadeSequenceRunning = true;
-    print("--- Starting Shade Swipe Sequence ---");
+    debugPrint("--- Starting Shade Swipe Sequence ---");
 
     try {
       final dragHandle = _findRiseHandle(doc, rawXML);
       if (dragHandle == null) {
-        print("Handle not found in initial XML.");
+        debugPrint("Handle not found in initial XML.");
         _isShadeSequenceRunning = false;
         return;
       }
 
-      print("Step 1: Swiping DOWN to bottom.");
+      debugPrint("Step 1: Swiping DOWN to bottom.");
       _sendSwipeCommand(dragHandle, endX: 360, endY: 1500);
 
       _xmlUpdateCompleter = Completer<XmlDocument>();
 
       await Future.delayed(const Duration(seconds: 11));
+      if (_cancelRequested || !mounted) return;
 
       final middleDoc = await _xmlUpdateCompleter!.future.timeout(
         const Duration(seconds: 12),
         onTimeout: () => doc, // Fallback to avoid hanging
       );
+      if (_cancelRequested || !mounted) return;
 
       final movedHandle = _findRiseHandle(middleDoc, rawXML);
       if (movedHandle != null) {
-        print("Step 2: Swiping back UP to center.");
+        debugPrint("Step 2: Swiping back UP to center.");
         _sendSwipeCommand(movedHandle, endX: 360, endY: 600);
 
         await Future.delayed(const Duration(seconds: 4));
+        if (_cancelRequested || !mounted) return;
 
-        print("Shade sequence complete. Transitioning to Fish Deeper.");
+        debugPrint("Shade sequence complete. Transitioning to Fish Deeper.");
         if (mounted) {
           setState(() {
             _currentState = AutoState.performingScan;
@@ -445,21 +724,22 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
           _launchFishDeeper();
         }
       } else {
-        print("Could not find handle at the bottom position.");
+        debugPrint("Could not find handle at the bottom position.");
         _isShadeSequenceRunning = false;
       }
     } catch (e) {
-      print("Error during shade sequence: $e");
+      debugPrint("Error during shade sequence: $e");
       _isShadeSequenceRunning = false;
     }
   }
 
   void _closeApp({String? packageName}) {
+    _markProgress();
     final targetDevice = getSelectedDeviceId();
 
     final String packageToClose = packageName ?? "eu.deeper.fishdeeper";
 
-    print("Closing app: $packageToClose on device: $targetDevice");
+    debugPrint("Closing app: $packageToClose on device: $targetDevice");
 
     ws.sendCommand({
       "action": "close",
@@ -478,8 +758,9 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
       try {
         return nodes.firstWhere((n) {
           if (text != null) return n.getAttribute('text') == text;
-          if (contentDesc != null)
+          if (contentDesc != null) {
             return n.getAttribute('content-desc') == contentDesc;
+          }
           return false;
         });
       } catch (_) {
@@ -497,31 +778,31 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     final boatScanNode = findNode(contentDesc: 'Boat scan icon');
 
     if (updateNode && laterNode != null) {
-      print('Detected Update dialog → clicking Later');
+      debugPrint('Detected Update dialog → clicking Later');
       _clickByXmlNode(laterNode);
       return;
     }
 
     if (navigateNode != null) {
-      print('Clicking navigate without map');
+      debugPrint('Clicking navigate without map');
       _clickByXmlNode(navigateNode);
       return;
     }
 
     if (connectNode != null) {
-      print('Initial setup → clicking Connect');
+      debugPrint('Initial setup → clicking Connect');
       _clickByXmlNode(connectNode);
       return;
     }
 
     if (cancelNode != null) {
-      print('Detected Cancel dialog → clicking Cancel');
+      debugPrint('Detected Cancel dialog → clicking Cancel');
       _clickByXmlNode(cancelNode);
       return;
     }
 
     if (boatScanNode != null) {
-      print('Detected Boat scan icon');
+      debugPrint('Detected Boat scan icon');
       _clickByXmlNode(boatScanNode);
 
       final totalSeconds =
@@ -530,16 +811,17 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
           (int.tryParse(_secondsController.text) ?? 0);
       _startTimer(totalSeconds);
       setState(() => initialConnectionComplete = true);
+      _notifyScanStarted();
       return;
     }
 
-    print('No actionable elements found');
+    debugPrint('No actionable elements found');
   }
 
   bool exportedCsv = false;
   void _handleUploadScan(XmlDocument doc) {
     if (_isSynced) {
-      print('Scans synced. Transitioning to Tuya to turn off USB.');
+      debugPrint('Scans synced. Transitioning to Tuya to turn off USB.');
       setState(() => _currentState = AutoState.switchingOff);
       _launchTuya();
       return;
@@ -549,12 +831,15 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     XmlElement? findNode({String? text, String? resId, String? contentDesc}) {
       try {
         return nodes.firstWhere((n) {
-          if (text != null)
+          if (text != null) {
             return (n.getAttribute('text') ?? '').contains(text);
-          if (resId != null)
+          }
+          if (resId != null) {
             return (n.getAttribute('resource-id') ?? '').contains(resId);
-          if (contentDesc != null)
+          }
+          if (contentDesc != null) {
             return (n.getAttribute('content-desc') ?? '').contains(contentDesc);
+          }
           return false;
         });
       } catch (_) {
@@ -570,47 +855,48 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
     final menuButtonNode = findNode(resId: 'menuButton');
 
     if (saveToFilesNode != null && !exportedCsv) {
-      print('Saving to files via XML');
+      debugPrint('Saving to files via XML');
       _clickByXmlNode(saveToFilesNode);
       exportedCsv = true;
       return;
     }
 
     if (exportCsvNode != null && !exportedCsv) {
-      print("Exporting CSV data to phone via XML");
+      debugPrint("Exporting CSV data to phone via XML");
       _clickByXmlNode(exportCsvNode);
       return;
     }
 
     if (moreIconNode != null && !exportedCsv) {
-      print("Clicking moreIcon via XML");
+      debugPrint("Clicking moreIcon via XML");
       _clickByXmlNode(moreIconNode);
       return;
     }
 
     if (syncScansNode != null) {
-      print('History loaded: Clicking Sync via XML...');
+      debugPrint('History loaded: Clicking Sync via XML...');
       _clickByXmlNode(syncScansNode);
       setState(() => _isSynced = true);
       return;
     }
 
     if (historyNode != null) {
-      print('Ready to sync: Clicking History via XML...');
+      debugPrint('Ready to sync: Clicking History via XML...');
       _clickByXmlNode(historyNode);
       return;
     }
 
     if (menuButtonNode != null) {
-      print('Clicking Menu Button via XML.');
+      debugPrint('Clicking Menu Button via XML.');
       _clickByXmlNode(menuButtonNode);
       return;
     }
 
-    print('No actionable elements found in the current UI state');
+    debugPrint('No actionable elements found in the current UI state');
   }
 
   void _clickByXmlNode(XmlElement node) {
+    _markProgress();
     final xmlString = node.toXmlString();
     final cmd = {
       "action": "clickByXml",
@@ -619,7 +905,7 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
       "sender": deviceId,
     };
     ws.sendCommand(cmd);
-    print(
+    debugPrint(
       "Sent clickByXml for node: ${node.getAttribute('text') ?? node.getAttribute('content-desc') ?? 'unknown'}",
     );
   }
@@ -627,13 +913,13 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
   void startAutomation() {
     /*
     if (!isConnected) {
-      print("Not connected to WebSocket.");
+      debugPrint("Not connected to WebSocket.");
       return;
     }
     */
 
     if (_selectedSonar == null) {
-      print("Please select a device before starting automation.");
+      debugPrint("Please select a device before starting automation.");
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Please select a device.')));
@@ -659,11 +945,83 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
       _readyToFinishScan = false;
     });
 
+    _setAutomationInProgress(
+      true,
+      sonarName: _activeSiteName,
+      sonarId: _selectedSonar?['sonar_id'],
+    );
+    _startWatchdog();
     _launchTuya();
   }
 
+  void _startWatchdog() {
+    _cancelRequested = false;
+    _stalled = false;
+    _watchdogSuspended = false;
+    _lastProgressAt = DateTime.now();
+    _stallWatchdog?.cancel();
+    _stallWatchdog = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted ||
+          !automationRunning ||
+          _watchdogSuspended ||
+          _lastProgressAt == null) {
+        return;
+      }
+      final elapsed = DateTime.now().difference(_lastProgressAt!);
+      if (elapsed > _stallThreshold && !_stalled) {
+        setState(() => _stalled = true);
+      }
+    });
+  }
+
+  void _stopWatchdog() {
+    _stallWatchdog?.cancel();
+    _stallWatchdog = null;
+  }
+
+  void _markProgress() {
+    _lastProgressAt = DateTime.now();
+    if (_stalled && mounted) setState(() => _stalled = false);
+  }
+
+  // The scan-duration countdown in _startTimer is a long, expected wait with
+  // nothing for the automation to click - suspend the watchdog for it rather
+  // than faking "progress" every tick, so a normal multi-minute scan can't
+  // get mistaken for a stuck automation once it passes the stall threshold.
+  void _suspendWatchdog() {
+    _watchdogSuspended = true;
+    if (_stalled && mounted) setState(() => _stalled = false);
+  }
+
+  void _resumeWatchdog() {
+    _watchdogSuspended = false;
+    _markProgress();
+  }
+
+  void _cancelAutomation() {
+    _cancelRequested = true;
+    _stopWatchdog();
+    _automationTimer?.cancel();
+    _setAutomationInProgress(false);
+    setState(() {
+      automationRunning = false;
+      _currentState = AutoState.idle;
+      _stalled = false;
+      _readyToFinishScan = false;
+      initialConnectionComplete = false;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Automation cancelled. The physical device may still be mid-action — check it manually.',
+        ),
+      ),
+    );
+  }
+
   void _launchShades() {
-    print("Launching Smart Shades");
+    _markProgress();
+    debugPrint("Launching Smart Shades");
     ws.sendCommand({
       "action": "launch",
       "package": "com.wazombi.RISE/crc64c90e479072a4489e.DrawerMainActivity",
@@ -673,7 +1031,8 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
   }
 
   void _launchTuya() {
-    print("Launching Tuya to toggle USB");
+    _markProgress();
+    debugPrint("Launching Tuya to toggle USB");
     ws.sendCommand({
       "action": "launch",
       "package":
@@ -684,7 +1043,8 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
   }
 
   void _launchFishDeeper() {
-    print("Launching Fish Deeper");
+    _markProgress();
+    debugPrint("Launching Fish Deeper");
     ws.sendCommand({
       "action": "launch",
       "package":
@@ -710,6 +1070,121 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
       case WebSocketConnectionStatus.disconnected:
         return SystemStatus.offline;
     }
+  }
+
+  Widget _buildInterruptionBanner() {
+    if (!_resumedFromInterruption) return const SizedBox.shrink();
+
+    final sonarLabel =
+        (_interruptedSonarName != null && _interruptedSonarName!.isNotEmpty)
+        ? ' on "$_interruptedSonarName"'
+        : '';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.red.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.red.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.report_problem_outlined, color: Colors.red.shade800),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  "Automation didn't finish cleanly",
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'A previous scan automation$sonarLabel was interrupted (app closed, '
+            'crashed, or lost power) before it finished. Physical devices — '
+            'power switch, shades, sonar app — may be left in an unknown '
+            'state.',
+            style: TextStyle(color: Colors.red.shade900, fontSize: 13),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: _forcingDevicesOff ? null : _forceDevicesOff,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red.shade800,
+                    side: BorderSide(color: Colors.red.shade300),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  child: _forcingDevicesOff
+                      ? const SizedBox(
+                          height: 16,
+                          width: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text(
+                          'Force devices off',
+                          textAlign: TextAlign.center,
+                        ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextButton(
+                  onPressed: _forcingDevicesOff
+                      ? null
+                      : _acknowledgeInterruption,
+                  child: const Text(
+                    "I've checked it",
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            "\"Force devices off\" closes the scan/shade apps and restores "
+            "WiFi, then opens Tuya so you can verify the power switch "
+            "yourself — it can't safely guess whether the plug is on or off.",
+            style: TextStyle(color: Colors.red.shade700, fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStallBanner() {
+    if (!_stalled || !automationRunning) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.orange.shade200),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.warning_amber_rounded, color: Colors.orange.shade800),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              "No progress for a while — automation may be stuck.",
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          TextButton(onPressed: _cancelAutomation, child: const Text('Cancel')),
+        ],
+      ),
+    );
   }
 
   Widget _buildTimerDisplay() {
@@ -783,7 +1258,7 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          "Select Sonar:",
+          "Select Sonar",
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
@@ -795,38 +1270,44 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
             style: TextStyle(color: Colors.grey),
           )
         else
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: _registeredSonars.map((sonar) {
-              final isSelected =
-                  _selectedSonar?['sonar_id'] == sonar['sonar_id'];
-              return ElevatedButton(
-                onPressed: () {
-                  setState(() {
-                    _selectedSonar = sonar;
-                    _activeSiteName = sonar['name'] ?? '';
-                    _statusCardKey = UniqueKey();
-                  });
-                  if (_connectionStatus ==
-                      WebSocketConnectionStatus.disconnected) {
-                    _attemptConnection();
-                  } else {
-                    _sendPing();
-                  }
-                },
-                style: ElevatedButton.styleFrom(
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12.0),
+          Center(
+            child: Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
+              children: _registeredSonars.map((sonar) {
+                final isSelected =
+                    _selectedSonar?['sonar_id'] == sonar['sonar_id'];
+                return ElevatedButton(
+                  onPressed: () {
+                    setState(() {
+                      _selectedSonar = sonar;
+                      _activeSiteName = sonar['name'] ?? '';
+                      _statusCardKey = UniqueKey();
+                    });
+                    if (_connectionStatus ==
+                        WebSocketConnectionStatus.disconnected) {
+                      _attemptConnection();
+                    } else {
+                      _sendPing();
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    shape: const StadiumBorder(),
+                    minimumSize: const Size(80, 48),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 12,
+                    ),
+                    backgroundColor: isSelected
+                        ? Colors.blue
+                        : Colors.grey[300],
+                    foregroundColor: isSelected ? Colors.white : Colors.black,
                   ),
-                  minimumSize: const Size(80, 80),
-                  padding: EdgeInsets.zero,
-                  backgroundColor: isSelected ? Colors.blue : Colors.grey[300],
-                  foregroundColor: isSelected ? Colors.white : Colors.black,
-                ),
-                child: Text(sonar['name'] ?? ''),
-              );
-            }).toList(),
+                  child: Text(sonar['name'] ?? ''),
+                );
+              }).toList(),
+            ),
           ),
       ],
     );
@@ -875,6 +1356,7 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
                               width: 200,
                             ),
                             const SizedBox(height: 12),
+                            _buildInterruptionBanner(),
                           ],
                         ),
                         if (_selectedSonar != null) ...[
@@ -912,9 +1394,9 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
                             TimerButtonRow(
                               forceClose: automationRunning,
                               buttons: [
-                                TimerButtonData(title: '5', subtitle: 'Quick'),
-                                TimerButtonData(title: '10', subtitle: 'Std'),
-                                TimerButtonData(title: '30', subtitle: 'Long'),
+                                TimerButtonData(title: '1', subtitle: 'Quick'),
+                                TimerButtonData(title: '3', subtitle: 'Std'),
+                                TimerButtonData(title: '5', subtitle: 'Long'),
                                 TimerButtonData(
                                   title: 'Input',
                                   subtitle: 'Custom',
@@ -922,7 +1404,6 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
                               ],
                               onDurationChanged: (totalSeconds) {
                                 setState(() {
-                                  _selectedTotalSeconds = totalSeconds;
                                   _hoursController.text = "0";
                                   _minutesController.text = (totalSeconds ~/ 60)
                                       .toString();
@@ -932,6 +1413,7 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
                               },
                             ),
                             _buildTimerDisplay(),
+                            _buildStallBanner(),
                           ],
                         ),
 
@@ -964,6 +1446,21 @@ class _DeviceControlPageState extends State<DeviceControlPage> {
                                 foregroundColor: Colors.white,
                               ),
                             ),
+                            if (automationRunning) ...[
+                              const SizedBox(height: 10),
+                              OutlinedButton(
+                                onPressed: _cancelAutomation,
+                                style: OutlinedButton.styleFrom(
+                                  minimumSize: const Size.fromHeight(44),
+                                  foregroundColor: Colors.red,
+                                  side: const BorderSide(color: Colors.red),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                child: const Text('Cancel Automation'),
+                              ),
+                            ],
                             const SizedBox(height: 10),
                           ],
                         ),
