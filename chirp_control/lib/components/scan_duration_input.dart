@@ -63,6 +63,7 @@ class _TimerButtonRowState extends State<TimerButtonRow> {
             final item = widget.buttons[index];
             final bool isLast = index == widget.buttons.length - 1;
             final bool isSelected = _selectedIndex == index;
+            final bool isNumeric = int.tryParse(item.title) != null;
 
             return ElevatedButton(
               style: ElevatedButton.styleFrom(
@@ -84,12 +85,29 @@ class _TimerButtonRowState extends State<TimerButtonRow> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(
-                    item.title,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.baseline,
+                    textBaseline: TextBaseline.alphabetic,
+                    children: [
+                      Text(
+                        item.title,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      if (isNumeric) ...[
+                        const SizedBox(width: 2),
+                        Text(
+                          'min',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: isSelected ? Colors.white70 : Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                   Text(
                     item.subtitle,

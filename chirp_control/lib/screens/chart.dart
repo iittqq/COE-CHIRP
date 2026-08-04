@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:ionicons_plus/ionicons_plus.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../utils/scan_repo.dart';
+import '../utils/units_repository.dart';
 
 class ScanAnalysisPage extends StatefulWidget {
   final ScanData scan;
@@ -14,10 +15,23 @@ class ScanAnalysisPage extends StatefulWidget {
 
 class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
   final ScrollController _scrollCtrl = ScrollController();
+  final TextEditingController _notesCtrl = TextEditingController();
+  bool _isMetric = true;
+  bool _savingNote = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _notesCtrl.text = widget.scan.notes;
+    loadIsMetric().then((value) {
+      if (mounted) setState(() => _isMetric = value);
+    });
+  }
 
   @override
   void dispose() {
     _scrollCtrl.dispose();
+    _notesCtrl.dispose();
     super.dispose();
   }
 
@@ -42,7 +56,7 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
       final depthMeters = _toDouble(row[2]);
       if (depthMeters == null) continue;
 
-      depthValues.add(depthMeters * 100);
+      depthValues.add(cmToDisplayUnit(depthMeters * 100, _isMetric));
     }
 
     if (depthValues.isEmpty) return null;
@@ -67,8 +81,8 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
 
       if (depthMeters == null || timestampMs == null) continue;
 
-      final depthCm = depthMeters * 100;
-      points.add(FlSpot(timestampMs, depthCm));
+      final depthDisplay = cmToDisplayUnit(depthMeters * 100, _isMetric);
+      points.add(FlSpot(timestampMs, depthDisplay));
     }
 
     if (points.isEmpty) return [];
@@ -79,6 +93,94 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
     return points
         .map((point) => FlSpot((point.x - firstTime) / 1000.0, -point.y))
         .toList();
+  }
+
+  List<List<FlSpot>> _splitSpotsAtGaps(List<FlSpot> spots) {
+    if (spots.length < 3) return [spots];
+
+    final deltas = <double>[];
+    for (var i = 1; i < spots.length; i++) {
+      deltas.add(spots[i].x - spots[i - 1].x);
+    }
+
+    final sortedDeltas = [...deltas]..sort();
+    final median = sortedDeltas[sortedDeltas.length ~/ 2];
+    final threshold = median * 3.0 < 1.0 ? 1.0 : median * 3.0;
+
+    final segments = <List<FlSpot>>[];
+    var current = <FlSpot>[spots.first];
+
+    for (var i = 1; i < spots.length; i++) {
+      if (deltas[i - 1] > threshold) {
+        segments.add(current);
+        current = <FlSpot>[];
+      }
+      current.add(spots[i]);
+    }
+    segments.add(current);
+
+    return segments;
+  }
+
+  double _niceLeftStep(double yRange) {
+    const candidates = [
+      1.0,
+      2.0,
+      5.0,
+      10.0,
+      20.0,
+      25.0,
+      50.0,
+      100.0,
+      200.0,
+      250.0,
+      500.0,
+      1000.0,
+    ];
+    const targetTicks = 6.0;
+
+    for (final step in candidates) {
+      if (yRange / step <= targetTicks) return step;
+    }
+
+    return candidates.last;
+  }
+
+  double _niceBottomStep(double xRange, double fullWidth) {
+    const candidates = [
+      5.0,
+      10.0,
+      15.0,
+      20.0,
+      30.0,
+      45.0,
+      60.0,
+      90.0,
+      120.0,
+      180.0,
+      240.0,
+      300.0,
+      450.0,
+      600.0,
+      900.0,
+      1200.0,
+      1800.0,
+      2700.0,
+      3600.0,
+      5400.0,
+      7200.0,
+      10800.0,
+    ];
+    const targetPxPerLabel = 65.0;
+
+    final pxPerSecond = fullWidth / xRange;
+    final minStepForSpacing = targetPxPerLabel / pxPerSecond;
+
+    for (final step in candidates) {
+      if (step >= minStepForSpacing) return step;
+    }
+
+    return candidates.last;
   }
 
   Widget _xTick(double value, TitleMeta meta) {
@@ -195,33 +297,29 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
 
     final xRange = (maxX - minX).abs();
 
-    final bottomStep = xRange <= 60
-        ? 10.0
-        : xRange <= 180
-        ? 30.0
-        : xRange <= 600
-        ? 60.0
-        : 120.0;
-
-    const leftStep = 10.0;
+    final leftStep = _niceLeftStep(maxY - minY);
     const graphHeight = 260.0;
 
     return SizedBox(
       height: 320,
       child: LayoutBuilder(
         builder: (context, constraints) {
-          const beforeScroll = 300.0;
+          const minPxPerSecond = 8.0;
+          const minPxPerPoint = 3.0;
+          const maxFullWidth = 20000.0;
           final baseWidth = constraints.maxWidth - 52;
           final seenWidth = baseWidth < 220 ? 220.0 : baseWidth;
 
           double fullWidth = seenWidth;
-          if (xRange > beforeScroll) {
-            fullWidth = seenWidth * (xRange / beforeScroll);
-          }
+          fullWidth = fullWidth < xRange * minPxPerSecond
+              ? xRange * minPxPerSecond
+              : fullWidth;
+          fullWidth = fullWidth < spots.length * minPxPerPoint
+              ? spots.length * minPxPerPoint
+              : fullWidth;
+          if (fullWidth > maxFullWidth) fullWidth = maxFullWidth;
 
-          if (fullWidth < seenWidth) {
-            fullWidth = seenWidth;
-          }
+          final bottomStep = _niceBottomStep(xRange, fullWidth);
 
           return Column(
             children: [
@@ -282,6 +380,22 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
                                     color: const Color(0xFFD1D5DB),
                                   ),
                                 ),
+                                lineTouchData: LineTouchData(
+                                  touchTooltipData: LineTouchTooltipData(
+                                    getTooltipItems: (touchedSpots) {
+                                      return touchedSpots.map((spot) {
+                                        return LineTooltipItem(
+                                          '${(-spot.y).toStringAsFixed(2)} ${depthUnitLabel(_isMetric)}',
+                                          const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 12,
+                                          ),
+                                        );
+                                      }).toList();
+                                    },
+                                  ),
+                                ),
                                 titlesData: FlTitlesData(
                                   topTitles: const AxisTitles(
                                     sideTitles: SideTitles(showTitles: false),
@@ -301,16 +415,18 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
                                     ),
                                   ),
                                 ),
-                                lineBarsData: [
-                                  LineChartBarData(
-                                    spots: spots,
-                                    isCurved: true,
-                                    barWidth: 2,
-                                    color: lineColor,
-                                    dotData: const FlDotData(show: false),
-                                    belowBarData: BarAreaData(show: false),
-                                  ),
-                                ],
+                                lineBarsData: _splitSpotsAtGaps(spots)
+                                    .map(
+                                      (segment) => LineChartBarData(
+                                        spots: segment,
+                                        isCurved: true,
+                                        barWidth: 2,
+                                        color: lineColor,
+                                        dotData: const FlDotData(show: false),
+                                        belowBarData: BarAreaData(show: false),
+                                      ),
+                                    )
+                                    .toList(),
                               ),
                             ),
                           ),
@@ -368,7 +484,7 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
             ),
             const SizedBox(height: 4),
             Text(
-              '$label (cm)',
+              '$label (${depthUnitLabel(_isMetric)})',
               style: const TextStyle(
                 fontSize: 12,
                 color: Color(0xFF6B7280),
@@ -404,7 +520,7 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
       spots: spots,
       emptyText: "No bathymetry chart data",
       xLabel: "Scan Duration (mm:ss)",
-      yLabel: "Depth (cm)",
+      yLabel: "Depth (${depthUnitLabel(_isMetric)})",
     );
   }
 
@@ -429,7 +545,9 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
         actions: [
           IconButton(
             icon: const Icon(Ionicons.share_outline),
-            onPressed: () {},
+            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Sharing isn't available yet.")),
+            ),
           ),
         ],
         shape: const Border(
@@ -454,15 +572,9 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
             child: _depthChart(bathymetryRows),
           ),
           const SizedBox(height: 14),
-          Row(
-            children: const [
-              Text(
-                "Notes",
-                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
-              ),
-              Spacer(),
-              Icon(Ionicons.menu_outline, size: 18),
-            ],
+          const Text(
+            "Notes",
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
           ),
           const SizedBox(height: 10),
           _notesBox(),
@@ -548,6 +660,25 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
     );
   }
 
+  Future<void> _saveNote() async {
+    FocusScope.of(context).unfocus();
+    setState(() => _savingNote = true);
+    try {
+      await ScanRepository.saveNotes(widget.scan, _notesCtrl.text);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Note saved')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to save note: $e')));
+    } finally {
+      if (mounted) setState(() => _savingNote = false);
+    }
+  }
+
   Widget _notesBox() {
     return Container(
       padding: const EdgeInsets.all(14),
@@ -559,6 +690,7 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
       child: Column(
         children: [
           TextField(
+            controller: _notesCtrl,
             maxLines: 4,
             decoration: const InputDecoration(
               hintText: "Notes, site conditions, issues...",
@@ -567,10 +699,14 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
           ),
           const SizedBox(height: 12),
           ElevatedButton(
-            onPressed: () {
-              FocusScope.of(context).unfocus();
-            },
-            child: const Text("Save Note"),
+            onPressed: _savingNote ? null : _saveNote,
+            child: _savingNote
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text("Save Note"),
           ),
         ],
       ),

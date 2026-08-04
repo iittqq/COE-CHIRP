@@ -51,7 +51,10 @@ class _MainNavigationState extends State<MainNavigation> {
     });
   }
 
-  List<Widget> get _pages => [
+  // Built once and kept alive via IndexedStack so switching tabs doesn't
+  // tear down and recreate state (which was re-fetching weather/sonars and
+  // reconnecting the WebSocket on every tab switch).
+  late final List<Widget> _pages = [
     HomeScreen(onNavScan: () => _onNavTapped(1)),
     const DeviceControlPage(),
     const HistoryPage(),
@@ -60,11 +63,11 @@ class _MainNavigationState extends State<MainNavigation> {
 
   @override
   Widget build(BuildContext context) {
-    final titles = ['Home', 'Initiate Scan', 'Data', 'Settings'];
+    final titles = ['Home', 'Scans', 'History', 'Settings'];
 
     return Scaffold(
       appBar: AppBar(title: Text(titles[_selectedIndex])),
-      body: _pages[_selectedIndex],
+      body: IndexedStack(index: _selectedIndex, children: _pages),
       bottomNavigationBar: BottomNavBar(
         currentIndex: _selectedIndex,
         onTap: _onNavTapped,

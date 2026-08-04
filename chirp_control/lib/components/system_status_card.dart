@@ -1,5 +1,5 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 
 enum SystemStatus { online, connecting, offline }
 
@@ -22,60 +22,65 @@ class SystemStatusCard extends StatefulWidget {
 }
 
 class _SystemStatusCardState extends State<SystemStatusCard>
-    with SingleTickerProviderStateMixin {
-  late Ticker _ticker;
-  Duration _elapsed = Duration.zero;
-  static const Duration _pingInterval = Duration(seconds: 60);
+    with WidgetsBindingObserver {
+  Timer? _pingTimer;
+  int _elapsedSeconds = 0;
+  bool _appInForeground = true;
+  static const int _pingIntervalSeconds = 60;
 
   @override
   void initState() {
     super.initState();
-    _ticker = createTicker((elapsed) {
-      if (widget.status != SystemStatus.online) {
-        _ticker.stop();
-        return;
-      }
+    WidgetsBinding.instance.addObserver(this);
+    _armTimer();
+  }
 
-      setState(() {
-        _elapsed = elapsed;
-        if (_elapsed >= _pingInterval) {
-          widget.onSendPing();
-          _ticker.stop();
-          _ticker.start();
-        }
-      });
-    });
-
-    if (widget.status == SystemStatus.online) {
-      _ticker.start();
-    }
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appInForeground = state == AppLifecycleState.resumed;
+    _armTimer();
   }
 
   @override
   void didUpdateWidget(covariant SystemStatusCard oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.status != oldWidget.status) _armTimer();
+  }
 
-    if (widget.status == SystemStatus.online &&
-        oldWidget.status != SystemStatus.online) {
-      _ticker.stop();
-      setState(() => _elapsed = Duration.zero);
-      _ticker.start();
-    } else if (widget.status != SystemStatus.online && _ticker.isActive) {
-      _ticker.stop();
-    }
+  // Timer.periodic runs on the wall clock rather than the frame scheduler,
+  // so this 60s check keeps firing across in-app tab switches, unlike a
+  // Ticker which stalls once Flutter stops rendering frames. It's still
+  // explicitly cancelled while backgrounded (see didChangeAppLifecycleState)
+  // so it doesn't run at all while the app itself isn't in use.
+  //
+  // Pauses (without resetting the countdown) while a check is already in
+  // flight (status == connecting) and resumes from where it left off once
+  // settled - a brief connecting blip (e.g. a periodic reconnect attempt)
+  // shouldn't keep restarting the clock, or a flaky connection would never
+  // let the countdown progress long enough to fire the next check.
+  void _armTimer() {
+    _pingTimer?.cancel();
+    _pingTimer = null;
+    if (!_appInForeground || widget.status == SystemStatus.connecting) return;
+    _pingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      setState(() {
+        _elapsedSeconds++;
+        if (_elapsedSeconds >= _pingIntervalSeconds) {
+          widget.onSendPing();
+          _elapsedSeconds = 0;
+        }
+      });
+    });
   }
 
   @override
   void dispose() {
-    _ticker.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _pingTimer?.cancel();
     super.dispose();
   }
 
-  String _getRemainingTime() {
-    if (widget.status != SystemStatus.online) return "Verifying...";
-    final remaining = _pingInterval - _elapsed;
-    return "${remaining.inSeconds}s";
-  }
+  int get _remainingSeconds => _pingIntervalSeconds - _elapsedSeconds;
 
   @override
   Widget build(BuildContext context) {
@@ -101,12 +106,16 @@ class _SystemStatusCardState extends State<SystemStatusCard>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (widget.showHeader)
-          Padding(
-            padding: const EdgeInsets.only(left: 4, bottom: 12, right: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 12, right: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              // The title is skipped in contexts (like the Home carousel)
+              // that already show a "System Status" section header once,
+              // above every card - but the per-card countdown still needs
+              // to render there.
+              if (widget.showHeader)
                 const Text(
                   "System Status",
                   style: TextStyle(
@@ -114,15 +123,16 @@ class _SystemStatusCardState extends State<SystemStatusCard>
                     fontWeight: FontWeight.w600,
                     color: Colors.grey,
                   ),
-                ),
-                if (isOnline)
-                  Text(
-                    "Next check: ${_getRemainingTime()}",
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-              ],
-            ),
+                )
+              else
+                const SizedBox.shrink(),
+              Text(
+                '$_remainingSeconds',
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ],
           ),
+        ),
         Container(
           padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(

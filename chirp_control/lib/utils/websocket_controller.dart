@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as status;
 
@@ -22,7 +23,7 @@ class WebSocketService {
 
   Future<void> connect() async {
     final uri = Uri.parse("$apiUrl?deviceId=$deviceId");
-    print("Connecting to $uri ...");
+    debugPrint("Connecting to $uri ...");
 
     try {
       _channel = WebSocketChannel.connect(uri);
@@ -35,36 +36,36 @@ class WebSocketService {
             final decoded = jsonDecode(event);
             _incomingController.add(decoded);
           } catch (e) {
-            print("Invalid message: $event");
+            debugPrint("Invalid message: $event");
           }
         },
         onError: (error) {
-          print("WebSocket error: $error");
+          debugPrint("WebSocket error: $error");
           throw error;
         },
-        onDone: () => print("WebSocket closed"),
+        onDone: () => debugPrint("WebSocket closed"),
       );
 
-      print("Connected to WebSocket ✅");
+      debugPrint("Connected to WebSocket ✅");
     } catch (e) {
-      print("Connection protocol failed: $e");
+      debugPrint("Connection protocol failed: $e");
       rethrow;
     }
   }
 
   void sendCommand(Map<String, dynamic> command) {
     if (_channel == null) {
-      print("WebSocket not connected.");
+      debugPrint("WebSocket not connected.");
       return;
     }
     final payload = jsonEncode(command);
     _channel!.sink.add(payload);
-    print("Sent: $payload");
+    debugPrint("Sent: $payload");
   }
 
   Future<void> disconnect() async {
     await _listener?.cancel();
     await _channel?.sink.close(status.normalClosure);
-    print("Disconnected WebSocket");
+    debugPrint("Disconnected WebSocket");
   }
 }
