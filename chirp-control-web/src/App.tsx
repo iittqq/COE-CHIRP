@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { AppBar, Box, CssBaseline, ThemeProvider, Toolbar, Typography } from "@mui/material";
+import { AppBar, Box, CssBaseline, IconButton, ThemeProvider, Toolbar, Typography } from "@mui/material";
 import { theme } from "./theme";
 import { SnackbarProvider } from "./notifications";
 import SideNavBar from "./components/SideNavBar";
+import menuIcon from "./assets/menu.svg";
 import Home from "./screens/Home";
 import Scan from "./screens/Scan";
 import History from "./screens/History";
@@ -26,6 +27,7 @@ function AppShell() {
   // WebSocket connections, ping timers, and weather fetch survive tab
   // switches instead of tearing down and reconnecting every time.
   const [activeTab, setActiveTab] = useState(0);
+  const [navOpen, setNavOpen] = useState(true);
 
   // Drill-in routes (History -> ScanAnalysis/CompareScans, Settings ->
   // SonarSensors) mirror Navigator.push, but only replace the content pane —
@@ -41,7 +43,7 @@ function AppShell() {
 
   return (
     <Box sx={{ display: "flex", height: "100dvh", width: "100%" }}>
-      <SideNavBar currentIndex={activeTab} onChange={selectTab} />
+      <SideNavBar currentIndex={activeTab} onChange={selectTab} open={navOpen} />
       <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", height: "100%" }}>
         {route?.screen === "scanAnalysis" ? (
           <ScanAnalysis scan={route.scan} onBack={popRoute} />
@@ -53,6 +55,18 @@ function AppShell() {
           <>
             <AppBar position="static">
               <Toolbar>
+                <IconButton
+                  onClick={() => setNavOpen((o) => !o)}
+                  sx={{ mr: 1.5 }}
+                  aria-label="Toggle navigation"
+                >
+                  <Box
+                    component="img"
+                    src={menuIcon}
+                    alt=""
+                    sx={{ width: 20, height: 20 }}
+                  />
+                </IconButton>
                 <Typography variant="h6" sx={{ fontWeight: 700 }}>
                   {TAB_TITLES[activeTab]}
                 </Typography>

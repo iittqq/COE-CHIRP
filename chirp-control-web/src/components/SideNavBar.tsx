@@ -18,20 +18,24 @@ const TABS: { icon: SvgIconComponent; label: string }[] = [
 interface SideNavBarProps {
   currentIndex: number;
   onChange: (index: number) => void;
+  open: boolean;
 }
 
-export default function SideNavBar({ currentIndex, onChange }: SideNavBarProps) {
+export default function SideNavBar({ currentIndex, onChange, open }: SideNavBarProps) {
   return (
     <Box
       sx={{
-        width: SIDEBAR_WIDTH,
+        width: open ? SIDEBAR_WIDTH : 0,
         flexShrink: 0,
         height: "100%",
         bgcolor: "#FFFFFF",
-        borderRight: "1px solid #E5E7EB",
+        borderRight: open ? "1px solid #E5E7EB" : "none",
         display: "flex",
         flexDirection: "column",
         py: 2.5,
+        overflow: "hidden",
+        whiteSpace: "nowrap",
+        transition: "width 0.2s ease, border-right 0.2s ease",
       }}
     >
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, px: 3, pb: 3 }}>
