@@ -3,6 +3,8 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import 'auth_repository.dart';
+import 'scan_repo.dart';
 
 Future<void> importScanZip() async {
   final result = await FilePicker.pickFiles(
@@ -62,5 +64,14 @@ Future<void> importScanZip() async {
   if (!sonarExists && !bathExists) {
     await targetDir.delete(recursive: true);
     throw Exception('Zip did not contain sonar.csv or bathymetry.csv');
+  }
+
+  // Tag with the current account so the scan is attributed to whoever
+  // imported it. Local-only metadata for now - best-effort, so a missing
+  // session (shouldn't happen, import is gated behind login) doesn't block
+  // the import itself.
+  final session = await AuthRepository.getSession();
+  if (session != null) {
+    await ScanRepository.tagUserId(targetDir, session.userId);
   }
 }

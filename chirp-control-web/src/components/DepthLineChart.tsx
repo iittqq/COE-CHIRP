@@ -23,6 +23,11 @@ const MIN_PX_PER_SECOND = 8;
 const MIN_PX_PER_POINT = 3;
 const MAX_CHART_WIDTH = 20_000;
 const BASE_WIDTH = 640;
+// Very flat scans (e.g. depth varying only 64.2 -> 65) otherwise collapse to a
+// single y-axis tick, since the smallest nice step is 1. Force the axis to span
+// at least this many display units so it stays "zoomed out" with ~5-6 integer
+// ticks, matching how higher-variation scans render.
+const MIN_Y_SPAN = 5;
 
 const axisLineSx = {
   "& .MuiChartsAxis-line, & .MuiChartsAxis-tick": { stroke: "#c3c2b7" },
@@ -126,8 +131,14 @@ export default function DepthLineChart({ series, xValues, unit }: DepthLineChart
   const highY = Math.max(...allY);
   const yRange = highY - lowY;
   const yPadding = yRange < 0.01 ? 1 : yRange * 0.08;
-  const minY = lowY - yPadding;
-  const maxY = highY + yPadding;
+  let minY = lowY - yPadding;
+  let maxY = highY + yPadding;
+
+  if (maxY - minY < MIN_Y_SPAN) {
+    const center = (minY + maxY) / 2;
+    minY = center - MIN_Y_SPAN / 2;
+    maxY = center + MIN_Y_SPAN / 2;
+  }
 
   const maxX = Math.max(...xValues, 1);
 

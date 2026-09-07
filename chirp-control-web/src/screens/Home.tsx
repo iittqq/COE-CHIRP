@@ -4,6 +4,7 @@ import {
   Button,
   CircularProgress,
   Dialog,
+  DialogActions,
   DialogContent,
   DialogTitle,
   List,
@@ -22,7 +23,8 @@ import SystemStatusCard, { type SystemStatus } from "../components/SystemStatusC
 import { WebSocketService } from "../utils/websocketController";
 import { fetchSonars, sonarsChanged, type Sonar } from "../utils/sonarRepository";
 import { loadSonarAlertsEnabled } from "../utils/alertPrefs";
-import { importScanZip } from "../utils/importScan";
+import { deriveFolderName, importScanZip } from "../utils/importScan";
+import { findScanByFolderName, type ScanData } from "../utils/scanRepo";
 import { useSnackbar } from "../notifications";
 import {
   defaultWeatherLocation,
@@ -92,6 +94,7 @@ export default function Home({ onNavScan, onScanImported }: HomeProps) {
   const [locationQuery, setLocationQuery] = useState("");
   const [locationResults, setLocationResults] = useState<WeatherLocation[]>([]);
   const [locationSearching, setLocationSearching] = useState(false);
+  const [pendingImport, setPendingImport] = useState<{ file: File; existing: ScanData } | null>(null);
 
   const wsRef = useRef<WebSocketService | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -237,10 +240,16 @@ export default function Home({ onNavScan, onScanImported }: HomeProps) {
     const unsubscribe = sonarsChanged.subscribe(loadSonars);
     setSonarAlertsEnabled(loadSonarAlertsEnabled());
 
+    // Capture the Map itself (not re-read `.current` inside the cleanup
+    // closure below) - it's the same object for the component's whole
+    // lifetime, only ever mutated via .set()/.delete(), so this still sees
+    // every timer scheduled between mount and unmount.
+    const pingTimeoutTimers = pingTimeoutTimersRef.current;
+
     return () => {
       unsubscribe();
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      for (const timer of pingTimeoutTimersRef.current.values()) clearTimeout(timer);
+      for (const timer of pingTimeoutTimers.values()) clearTimeout(timer);
       ws.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -273,12 +282,9 @@ export default function Home({ onNavScan, onScanImported }: HomeProps) {
     loadWeather(location);
   };
 
-  const handleImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
+  const finishImport = async (file: File, overwriteId?: string) => {
     try {
-      await importScanZip(file);
+      await importScanZip(file, { overwriteId });
       notify("Scan imported successfully!", { severity: "success" });
       onScanImported();
     } catch (err) {
@@ -286,8 +292,28 @@ export default function Home({ onNavScan, onScanImported }: HomeProps) {
     }
   };
 
+  const handleImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    const existing = await findScanByFolderName(deriveFolderName(file.name));
+    if (existing) {
+      setPendingImport({ file, existing });
+      return;
+    }
+    await finishImport(file);
+  };
+
+  const confirmOverwriteImport = async () => {
+    if (!pendingImport) return;
+    const { file, existing } = pendingImport;
+    setPendingImport(null);
+    await finishImport(file, existing.id);
+  };
+
   return (
-    <Box sx={{ p: 2, maxWidth: 960, mx: "auto" }}>
+    <Box sx={{ p: 2, maxWidth: 1280, mx: "auto" }}>
       {sonarLoading ? (
         <Box sx={{ display: "flex", justifyContent: "center", py: 2 }}>
           <CircularProgress />
@@ -457,6 +483,22 @@ export default function Home({ onNavScan, onScanImported }: HomeProps) {
             ))}
           </List>
         </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!pendingImport} onClose={() => setPendingImport(null)} fullWidth maxWidth="xs">
+        <DialogTitle sx={{ fontWeight: 700 }}>Scan already exists</DialogTitle>
+        <DialogContent>
+          <Typography>
+            A scan named &quot;{pendingImport?.existing.title}&quot; already exists. Importing
+            will overwrite it and its data cannot be recovered.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPendingImport(null)}>Cancel</Button>
+          <Button color="error" onClick={confirmOverwriteImport}>
+            Overwrite
+          </Button>
+        </DialogActions>
       </Dialog>
     </Box>
   );

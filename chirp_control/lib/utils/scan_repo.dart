@@ -14,6 +14,10 @@ class ScanData {
   final String time;
   final String duration;
   final String notes;
+  // Account user_id that created/imported this scan. Local-only metadata -
+  // there's no backend sync for scans yet. Nullable/absent for scans saved
+  // before this field existed, so older scan folders without it still load.
+  final String? userId;
 
   ScanData({
     required this.folderName,
@@ -25,6 +29,7 @@ class ScanData {
     required this.time,
     required this.duration,
     required this.notes,
+    this.userId,
   });
 }
 
@@ -199,6 +204,7 @@ class ScanRepository {
       final savedTitle = (metadata['title'] ?? '').toString().trim();
       final savedLocation = (metadata['location'] ?? '').toString().trim();
       final savedNotes = (metadata['notes'] ?? '').toString();
+      final savedUserId = metadata['user_id']?.toString();
 
       scans.add(
         ScanData(
@@ -213,6 +219,9 @@ class ScanRepository {
           time: formattedTime,
           duration: formattedDuration,
           notes: savedNotes,
+          userId: (savedUserId != null && savedUserId.isNotEmpty)
+              ? savedUserId
+              : null,
         ),
       );
     }
@@ -230,6 +239,13 @@ class ScanRepository {
 
   static Future<void> saveNotes(ScanData scan, String notes) async {
     await _writeMetadata(scan.folder, {'notes': notes});
+  }
+
+  // Tags a scan folder with the account that created/imported it. Called
+  // once at creation/import time (see import_scan.dart) - local-only
+  // metadata, no backend sync.
+  static Future<void> tagUserId(Directory folder, String userId) async {
+    await _writeMetadata(folder, {'user_id': userId});
   }
 
   static Future<void> deleteScan(ScanData scan) async {

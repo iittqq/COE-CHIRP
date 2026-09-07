@@ -47,6 +47,9 @@ dependencies:
   device_info_plus: ^11.2.0
   archive: ^4.0.9
   xml: ^6.5.0
+  share_plus: ^12.0.2
+  image_picker: ^1.2.3
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:

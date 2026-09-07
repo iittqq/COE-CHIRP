@@ -788,6 +788,13 @@ export default function Scan() {
     }
   };
 
+  const countdownColor =
+    remainingSeconds <= 10 && remainingSeconds > 0
+      ? "#F97316"
+      : remainingSeconds <= 0
+        ? "#EF4444"
+        : "primary.main";
+
   return (
     <Box
       sx={{
@@ -796,176 +803,173 @@ export default function Scan() {
         flexDirection: "column",
         gap: 2.5,
         minHeight: "100%",
-        maxWidth: 640,
+        maxWidth: 1080,
         mx: "auto",
         width: "100%",
       }}
     >
-      <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-        <Box component="img" src={radarSonarSvg} alt="" sx={{ width: 200, height: 200 }} />
-
-        {resumedFromInterruption && (
-          <Box
-            sx={{
-              mt: 1.5,
-              p: 1.5,
-              width: "100%",
-              borderRadius: "12px",
-              bgcolor: "#FEF2F2",
-              border: "1px solid #FECACA",
-            }}
-          >
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
-              <ReportProblemOutlinedIcon sx={{ color: "#991B1B" }} />
-              <Typography sx={{ fontWeight: 700, flex: 1 }}>
-                Automation didn&apos;t finish cleanly
-              </Typography>
-            </Box>
-            <Typography sx={{ color: "#7F1D1D", fontSize: 13, mt: 0.75 }}>
-              A previous scan automation
-              {interruptedSonarName ? ` on "${interruptedSonarName}"` : ""} was interrupted
-              (app closed, crashed, or lost power) before it finished. Physical devices — power
-              switch, shades, sonar app — may be left in an unknown state.
-            </Typography>
-            <Box sx={{ display: "flex", gap: 1, mt: 1.5 }}>
-              <Button
-                fullWidth
-                variant="outlined"
-                color="error"
-                onClick={forceDevicesOff}
-                disabled={forcingDevicesOff}
-              >
-                {forcingDevicesOff ? <CircularProgress size={18} color="error" /> : "Force devices off"}
-              </Button>
-              <Button
-                fullWidth
-                variant="text"
-                onClick={acknowledgeInterruption}
-                disabled={forcingDevicesOff}
-              >
-                I&apos;ve checked it
-              </Button>
-            </Box>
-            <Typography sx={{ color: "#B91C1C", fontSize: 11, mt: 1 }}>
-              "Force devices off" closes the scan/shade apps and restores WiFi, then opens Tuya
-              so you can verify the power switch yourself — it can&apos;t safely guess whether
-              the plug is on or off.
-            </Typography>
-          </Box>
-        )}
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+        <Box component="img" src={radarSonarSvg} alt="" sx={{ width: 48, height: 48 }} />
+        <Typography variant="h5" sx={{ fontWeight: 800 }}>
+          Scan
+        </Typography>
       </Box>
 
-      {selectedSonar && (
-        <SystemStatusCard
-          key={statusCardKey}
-          status={automationRunning ? "connecting" : getCardStatus()}
-          siteName={activeSiteName}
-          onSendPing={sendPing}
-        />
+      {resumedFromInterruption && (
+        <Box
+          sx={{
+            p: 1.5,
+            borderRadius: "12px",
+            bgcolor: "#FEF2F2",
+            border: "1px solid #FECACA",
+          }}
+        >
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
+            <ReportProblemOutlinedIcon sx={{ color: "#991B1B" }} />
+            <Typography sx={{ fontWeight: 700, flex: 1 }}>
+              Automation didn&apos;t finish cleanly
+            </Typography>
+          </Box>
+          <Typography sx={{ color: "#7F1D1D", fontSize: 13, mt: 0.75 }}>
+            A previous scan automation
+            {interruptedSonarName ? ` on "${interruptedSonarName}"` : ""} was interrupted
+            (app closed, crashed, or lost power) before it finished. Physical devices — power
+            switch, shades, sonar app — may be left in an unknown state.
+          </Typography>
+          <Box sx={{ display: "flex", gap: 1, mt: 1.5 }}>
+            <Button
+              fullWidth
+              variant="outlined"
+              color="error"
+              onClick={forceDevicesOff}
+              disabled={forcingDevicesOff}
+            >
+              {forcingDevicesOff ? <CircularProgress size={18} color="error" /> : "Force devices off"}
+            </Button>
+            <Button
+              fullWidth
+              variant="text"
+              onClick={acknowledgeInterruption}
+              disabled={forcingDevicesOff}
+            >
+              I&apos;ve checked it
+            </Button>
+          </Box>
+          <Typography sx={{ color: "#B91C1C", fontSize: 11, mt: 1 }}>
+            "Force devices off" closes the scan/shade apps and restores WiFi, then opens Tuya
+            so you can verify the power switch yourself — it can&apos;t safely guess whether
+            the plug is on or off.
+          </Typography>
+        </Box>
       )}
 
-      <Box>
-        <Typography sx={{ fontWeight: 700, mb: 1 }}>Select Sonar</Typography>
-        {sonarLoading ? (
-          <Box sx={{ display: "flex", justifyContent: "center" }}>
-            <CircularProgress size={24} />
+      <Box sx={{ display: "flex", flexDirection: { xs: "column", md: "row" }, gap: 3 }}>
+        <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2.5 }}>
+          <Box>
+            <Typography sx={{ fontWeight: 700, mb: 1 }}>Select Sonar</Typography>
+            {sonarLoading ? (
+              <Box sx={{ display: "flex", justifyContent: "center" }}>
+                <CircularProgress size={24} />
+              </Box>
+            ) : registeredSonars.length === 0 ? (
+              <Typography sx={{ color: "text.secondary" }}>
+                No sonars registered. Add one in Settings.
+              </Typography>
+            ) : (
+              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
+                {registeredSonars.map((sonar) => (
+                  <Chip
+                    key={sonar.sonar_id}
+                    label={sonar.name}
+                    onClick={() => selectSonar(sonar)}
+                    color={selectedSonar?.sonar_id === sonar.sonar_id ? "primary" : "default"}
+                    sx={{ height: 48, fontSize: 15, px: 1, fontWeight: 600 }}
+                  />
+                ))}
+              </Box>
+            )}
           </Box>
-        ) : registeredSonars.length === 0 ? (
-          <Typography sx={{ color: "text.secondary" }}>
-            No sonars registered. Add one in Settings.
-          </Typography>
-        ) : (
-          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, justifyContent: "center" }}>
-            {registeredSonars.map((sonar) => (
-              <Chip
-                key={sonar.sonar_id}
-                label={sonar.name}
-                onClick={() => selectSonar(sonar)}
-                color={selectedSonar?.sonar_id === sonar.sonar_id ? "primary" : "default"}
-                sx={{ height: 48, fontSize: 15, px: 1, fontWeight: 600 }}
-              />
-            ))}
-          </Box>
-        )}
-      </Box>
 
-      <Box>
-        <Box sx={{ display: "flex", justifyContent: "space-between", mb: 1.25 }}>
-          <Typography sx={{ fontWeight: 700 }}>Scan Duration</Typography>
-          <Typography sx={{ color: "primary.main", fontWeight: 700 }}>SET TIME</Typography>
+          <Box>
+            <Box sx={{ display: "flex", justifyContent: "space-between", mb: 1.25 }}>
+              <Typography sx={{ fontWeight: 700 }}>Scan Duration</Typography>
+              <Typography sx={{ color: "primary.main", fontWeight: 700 }}>SET TIME</Typography>
+            </Box>
+            <ScanDurationInput
+              forceClose={automationRunning}
+              buttons={[
+                { title: "1", subtitle: "Quick" },
+                { title: "3", subtitle: "Std" },
+                { title: "5", subtitle: "Long" },
+                { title: "Input", subtitle: "Custom" },
+              ]}
+              onDurationChanged={setDurationSeconds}
+            />
+          </Box>
         </Box>
-        <ScanDurationInput
-          forceClose={automationRunning}
-          buttons={[
-            { title: "1", subtitle: "Quick" },
-            { title: "3", subtitle: "Std" },
-            { title: "5", subtitle: "Long" },
-            { title: "Input", subtitle: "Custom" },
-          ]}
-          onDurationChanged={setDurationSeconds}
-        />
 
-        {!automationRunning && sessionSeconds > 0 ? (
-          <Typography sx={{ mt: 2.5, fontWeight: 700, fontSize: 16, color: "#15803D", textAlign: "center" }}>
-            Finished, find scans on Fish Deeper website
-          </Typography>
-        ) : readyToFinishScan ? (
-          <Typography sx={{ mt: 2.5, fontWeight: 700, fontSize: 16, color: "#15803D", textAlign: "center" }}>
-            Scanning Finished, Uploading to Fish Deeper website
-          </Typography>
-        ) : automationRunning && initialConnectionComplete ? (
-          <Box sx={{ mt: 2.5, textAlign: "center" }}>
-            <Typography
+        <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2.5 }}>
+          {selectedSonar ? (
+            <SystemStatusCard
+              key={statusCardKey}
+              status={automationRunning ? "connecting" : getCardStatus()}
+              siteName={activeSiteName}
+              onSendPing={sendPing}
+            />
+          ) : (
+            <Box
               sx={{
-                fontWeight: 700,
-                fontSize: 16,
-                color:
-                  remainingSeconds <= 10 && remainingSeconds > 0
-                    ? "#F97316"
-                    : remainingSeconds <= 0
-                      ? "#EF4444"
-                      : "primary.main",
+                p: 2.5,
+                borderRadius: "12px",
+                border: "1px dashed #E5E7EB",
+                textAlign: "center",
               }}
             >
-              Scan Time Remaining:
+              <Typography sx={{ color: "text.secondary" }}>
+                Select a sonar to see live status here.
+              </Typography>
+            </Box>
+          )}
+
+          {!automationRunning && sessionSeconds > 0 ? (
+            <Typography sx={{ fontWeight: 700, fontSize: 16, color: "#15803D", textAlign: "center" }}>
+              Finished, find scans on Fish Deeper website
             </Typography>
-            <Typography
+          ) : readyToFinishScan ? (
+            <Typography sx={{ fontWeight: 700, fontSize: 16, color: "#15803D", textAlign: "center" }}>
+              Scanning Finished, Uploading to Fish Deeper website
+            </Typography>
+          ) : automationRunning && initialConnectionComplete ? (
+            <Box sx={{ textAlign: "center" }}>
+              <Typography sx={{ fontWeight: 700, fontSize: 16, color: countdownColor }}>
+                Scan Time Remaining:
+              </Typography>
+              <Typography sx={{ fontSize: 48, fontWeight: 900, color: countdownColor }}>
+                {formatDuration(remainingSeconds)}
+              </Typography>
+            </Box>
+          ) : null}
+
+          {stalled && automationRunning && (
+            <Box
               sx={{
-                fontSize: 48,
-                fontWeight: 900,
-                color:
-                  remainingSeconds <= 10 && remainingSeconds > 0
-                    ? "#F97316"
-                    : remainingSeconds <= 0
-                      ? "#EF4444"
-                      : "primary.main",
+                p: 1.5,
+                borderRadius: "12px",
+                bgcolor: "#FFF7ED",
+                border: "1px solid #FED7AA",
+                display: "flex",
+                alignItems: "center",
+                gap: 1.25,
               }}
             >
-              {formatDuration(remainingSeconds)}
-            </Typography>
-          </Box>
-        ) : null}
-
-        {stalled && automationRunning && (
-          <Box
-            sx={{
-              mt: 2,
-              p: 1.5,
-              borderRadius: "12px",
-              bgcolor: "#FFF7ED",
-              border: "1px solid #FED7AA",
-              display: "flex",
-              alignItems: "center",
-              gap: 1.25,
-            }}
-          >
-            <WarningAmberRoundedIcon sx={{ color: "#9A3412" }} />
-            <Typography sx={{ fontWeight: 600, flex: 1 }}>
-              No progress for a while — automation may be stuck.
-            </Typography>
-            <Button onClick={cancelAutomation}>Cancel</Button>
-          </Box>
-        )}
+              <WarningAmberRoundedIcon sx={{ color: "#9A3412" }} />
+              <Typography sx={{ fontWeight: 600, flex: 1 }}>
+                No progress for a while — automation may be stuck.
+              </Typography>
+              <Button onClick={cancelAutomation}>Cancel</Button>
+            </Box>
+          )}
+        </Box>
       </Box>
 
       <Box sx={{ mt: "auto" }}>

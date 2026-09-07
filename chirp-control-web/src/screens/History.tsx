@@ -20,8 +20,8 @@ import ChevronRightRoundedIcon from "@mui/icons-material/ChevronRightRounded";
 import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
-import { deleteScan, loadScans, renameScan, type ScanData } from "../utils/scanRepo";
-import { importScanZip } from "../utils/importScan";
+import { deleteScan, findScanByFolderName, loadScans, renameScan, type ScanData } from "../utils/scanRepo";
+import { deriveFolderName, importScanZip } from "../utils/importScan";
 import { useSnackbar } from "../notifications";
 
 interface HistoryProps {
@@ -41,6 +41,7 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [pendingImport, setPendingImport] = useState<{ file: File; existing: ScanData } | null>(null);
 
   const importInputRef = useRef<HTMLInputElement>(null);
 
@@ -126,17 +127,34 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
     }
   };
 
-  const handleImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
+  const finishImport = async (file: File, overwriteId?: string) => {
     try {
-      await importScanZip(file);
+      await importScanZip(file, { overwriteId });
       await reload();
       notify("Scan imported successfully", { severity: "success" });
     } catch (err) {
       notify(`Import failed: ${(err as Error).message}`, { severity: "error" });
     }
+  };
+
+  const handleImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    const existing = await findScanByFolderName(deriveFolderName(file.name));
+    if (existing) {
+      setPendingImport({ file, existing });
+      return;
+    }
+    await finishImport(file);
+  };
+
+  const confirmOverwriteImport = async () => {
+    if (!pendingImport) return;
+    const { file, existing } = pendingImport;
+    setPendingImport(null);
+    await finishImport(file, existing.id);
   };
 
   const q = searchText.trim().toLowerCase();
@@ -176,7 +194,7 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
       <input ref={importInputRef} type="file" accept=".zip" hidden onChange={handleImportFile} />
 
       <Box sx={{ bgcolor: "#FFFFFF", px: 2, pb: 1.25 }}>
-        <Box sx={{ maxWidth: 900, mx: "auto" }}>
+        <Box sx={{ maxWidth: 1200, mx: "auto" }}>
           <TextField
             fullWidth
             size="small"
@@ -205,7 +223,7 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
           display: "flex",
           flexDirection: "column",
           gap: 1.5,
-          maxWidth: 900,
+          maxWidth: 1200,
           width: "100%",
           mx: "auto",
         }}
@@ -303,7 +321,7 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
       </Box>
 
       {selecting && picked.size > 0 && (
-        <Box sx={{ display: "flex", gap: 1.25, p: 2, maxWidth: 900, width: "100%", mx: "auto" }}>
+        <Box sx={{ display: "flex", gap: 1.25, p: 2, maxWidth: 1200, width: "100%", mx: "auto" }}>
           <Button
             variant="contained"
             disabled={picked.size !== 1}
@@ -363,6 +381,22 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
           <Button onClick={() => setDeleteConfirmOpen(false)}>Cancel</Button>
           <Button color="error" onClick={confirmDelete}>
             Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!pendingImport} onClose={() => setPendingImport(null)} fullWidth maxWidth="xs">
+        <DialogTitle>Scan already exists</DialogTitle>
+        <DialogContent>
+          <Typography>
+            A scan named &quot;{pendingImport?.existing.title}&quot; already exists. Importing
+            will overwrite it and its data cannot be recovered.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPendingImport(null)}>Cancel</Button>
+          <Button color="error" onClick={confirmOverwriteImport}>
+            Overwrite
           </Button>
         </DialogActions>
       </Dialog>

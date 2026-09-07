@@ -48,7 +48,7 @@ export default function WeatherGraph({
           },
         ]}
         grid={{ horizontal: true, vertical: true }}
-        margin={{ left: 56, right: 16, top: 24, bottom: 32 }}
+        margin={{ left: 8, right: 16, top: 24, bottom: 32 }}
         sx={{
           "& .MuiLineElement-root": { strokeWidth: 3 },
           "& .MuiAreaElement-root": { fillOpacity: 0.18 },

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:ionicons_plus/ionicons_plus.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:share_plus/share_plus.dart';
 import '../utils/scan_repo.dart';
 import '../utils/units_repository.dart';
 
@@ -33,6 +34,20 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
     _scrollCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
+  }
+
+  void _shareScan() {
+    final scan = widget.scan;
+    SharePlus.instance.share(
+      ShareParams(
+        text:
+            'Sonar scan "${scan.title}"\n'
+            'Location: ${scan.location}\n'
+            'Recorded: ${scan.time}\n'
+            'Duration: ${scan.duration}\n'
+            'Shared from Chirp',
+      ),
+    );
   }
 
   double? _toDouble(dynamic value) {
@@ -545,9 +560,7 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
         actions: [
           IconButton(
             icon: const Icon(Ionicons.share_outline),
-            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text("Sharing isn't available yet.")),
-            ),
+            onPressed: _shareScan,
           ),
         ],
         shape: const Border(

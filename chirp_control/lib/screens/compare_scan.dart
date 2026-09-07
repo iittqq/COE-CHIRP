@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:ionicons_plus/ionicons_plus.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:share_plus/share_plus.dart';
 import '../utils/scan_repo.dart';
 import '../utils/units_repository.dart';
 
@@ -37,6 +38,17 @@ class _CompareScansPageState extends State<CompareScansPage> {
   void dispose() {
     _scrollCtrl.dispose();
     super.dispose();
+  }
+
+  void _shareComparison() {
+    final titles = widget.scans.map((s) => s.title).join(', ');
+    SharePlus.instance.share(
+      ShareParams(
+        text:
+            'Comparing ${widget.scans.length} sonar scans: $titles\n'
+            'Shared from Chirp',
+      ),
+    );
   }
 
   double? _toDouble(dynamic value) {
@@ -621,9 +633,7 @@ class _CompareScansPageState extends State<CompareScansPage> {
         actions: [
           IconButton(
             icon: const Icon(Ionicons.share_outline),
-            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text("Sharing isn't available yet.")),
-            ),
+            onPressed: _shareComparison,
           ),
         ],
         shape: const Border(

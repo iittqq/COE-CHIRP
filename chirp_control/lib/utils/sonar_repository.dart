@@ -5,12 +5,14 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'auth_repository.dart';
 
 // Replace with your API Gateway invoke URL after deploying the Lambda.
 const _baseUrl = 'https://078qjv1849.execute-api.us-east-2.amazonaws.com';
 
 const _userIdPrefsKey = 'chirp_device_user_id';
 const _migratedPrefsKey = 'chirp_device_user_id_legacy_migrated_v2';
+const _accountMigratedPrefsKey = 'chirp_account_migrated_v1';
 
 // IDENTITY SCHEME - read this before changing how `user_id` is derived.
 //
@@ -18,18 +20,20 @@ const _migratedPrefsKey = 'chirp_device_user_id_legacy_migrated_v2';
 // `user_id` is computed ever changes without a migration path, every sonar
 // already stored under the old id becomes unreachable - the app *looks*
 // like it lost the user's sonars even though the rows are untouched in the
-// database. This already happened once: the original scheme derived
-// `user_id` from device_info_plus (Android build id / iOS
-// identifierForVendor). It was replaced with a locally-generated random id
-// cached in SharedPreferences, but devices that already had sonars
-// registered under the old device-derived id had no way to find them again
-// once they picked up the new scheme.
+// database. This already happened twice now:
 //
-// If you need to change the scheme again: don't just swap the generation
-// logic. Add a migration step in `getUserId()` (see `_migrateLegacySonars`)
-// that moves data from the old id to the new one *before* the old id
-// becomes unreachable, the same way this fix migrates from the legacy
-// device-id scheme.
+//   1. The original scheme derived `user_id` from device_info_plus
+//      (Android build id / iOS identifierForVendor). It was replaced with a
+//      locally-generated random id cached in SharedPreferences, migrated by
+//      `_migrateLegacyDeviceSonars`.
+//   2. That locally-generated anonymous id was in turn replaced by a real
+//      account's `user_id` (from `/auth` register/login) once accounts
+//      were introduced, migrated by `migrateAnonymousSonars`.
+//
+// Both migrations funnel through the shared `_migrateSonarsBetween` helper
+// below. If you need to change the scheme again: don't just swap the
+// generation/lookup logic. Add another migration step the same way,
+// *before* the old id becomes unreachable.
 class SonarRepository {
   static String? _cachedUserId;
   static final _deviceInfo = DeviceInfoPlugin();
@@ -41,26 +45,37 @@ class SonarRepository {
   // since IndexedStack keeps them alive for the whole app session.
   static final ValueNotifier<int> sonarsChanged = ValueNotifier<int>(0);
 
+  // Routes that call this assume a logged-in account exists (the app is
+  // gated behind login in main.dart), so this throws rather than silently
+  // falling back to an anonymous id.
   static Future<String> getUserId() async {
     if (_cachedUserId != null) return _cachedUserId!;
 
-    final prefs = await SharedPreferences.getInstance();
-    var userId = prefs.getString(_userIdPrefsKey);
-    if (userId == null) {
-      userId = _generateId();
-      await prefs.setString(_userIdPrefsKey, userId);
+    final session = await AuthRepository.getSession();
+    if (session == null) {
+      throw StateError(
+        'SonarRepository.getUserId() was called with no logged-in account. '
+        'Sonar routes are gated behind login in main.dart - this should '
+        'not happen.',
+      );
     }
+    final userId = session.userId;
 
-    // Runs once per install, whether `userId` above was just generated or
-    // was already persisted from before this migration existed - either way
-    // this device may still have sonars sitting under the legacy id. Only
-    // marked done on success so a failed attempt (e.g. no network on first
-    // launch) retries on the next app start instead of silently giving up.
+    // Runs once per install, whether the account above was just created or
+    // this device may still have sonars sitting under the legacy
+    // device-derived id from before accounts existed. Only marked done on
+    // success so a failed attempt (e.g. no network on first launch) retries
+    // on the next app start instead of silently giving up.
+    final prefs = await SharedPreferences.getInstance();
     if (!(prefs.getBool(_migratedPrefsKey) ?? false)) {
-      debugPrint('SonarRepository: checking for legacy sonars to migrate '
-          'to $userId');
-      final migrated = await _migrateLegacySonars(to: userId);
-      debugPrint('SonarRepository: migration check ${migrated ? 'done' : 'failed, will retry next launch'}');
+      debugPrint(
+        'SonarRepository: checking for legacy device-id sonars to '
+        'migrate to $userId',
+      );
+      final migrated = await _migrateLegacyDeviceSonars(to: userId);
+      debugPrint(
+        'SonarRepository: migration check ${migrated ? 'done' : 'failed, will retry next launch'}',
+      );
       if (migrated) {
         await prefs.setBool(_migratedPrefsKey, true);
       }
@@ -70,10 +85,31 @@ class SonarRepository {
     return userId;
   }
 
+  // Call after a logout so a subsequent login (possibly to a different
+  // account, on the same device/session) doesn't reuse the previous
+  // account's cached id.
+  static void resetForLogout() {
+    _cachedUserId = null;
+  }
+
   static String _generateId() {
     final rand = Random.secure();
     final bytes = List<int>.generate(16, (_) => rand.nextInt(256));
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  // The anonymous, locally-generated id used before real accounts existed.
+  // Kept only so devices that already have sonars registered under it (from
+  // before login was introduced) can migrate them to the logged-in
+  // account's id - see `migrateAnonymousSonars`.
+  static Future<String> _anonymousLocalId() async {
+    final prefs = await SharedPreferences.getInstance();
+    var anonymousId = prefs.getString(_userIdPrefsKey);
+    if (anonymousId == null) {
+      anonymousId = _generateId();
+      await prefs.setString(_userIdPrefsKey, anonymousId);
+    }
+    return anonymousId;
   }
 
   // The id scheme used before the random/SharedPreferences based id was
@@ -94,19 +130,23 @@ class SonarRepository {
     return null;
   }
 
-  // Returns true if migration either succeeded or there was nothing to do
-  // (no legacy id, or no sonars registered under it) - i.e. it's safe to
-  // stop checking. Returns false only when it couldn't tell (e.g. offline),
-  // so the caller retries on the next launch.
-  static Future<bool> _migrateLegacySonars({required String to}) async {
-    final legacyId = await _legacyDeviceId();
-    debugPrint('SonarRepository: legacy device id = $legacyId');
-    if (legacyId == null || legacyId == to) return true;
+  // Shared by every "move sonars from an old id scheme to a new one"
+  // migration. Returns true if migration either succeeded or there was
+  // nothing to do (no source id, or no sonars registered under it) - i.e.
+  // it's safe to stop checking. Returns false only when it couldn't tell
+  // (e.g. offline), so the caller retries later.
+  static Future<bool> _migrateSonarsBetween({
+    required String? from,
+    required String to,
+  }) async {
+    if (from == null || from == to) return true;
 
     try {
-      final legacySonars = await _fetchSonarsFor(legacyId);
-      debugPrint('SonarRepository: found ${legacySonars.length} sonar(s) '
-          'under legacy id $legacyId');
+      final legacySonars = await _fetchSonarsFor(from);
+      debugPrint(
+        'SonarRepository: found ${legacySonars.length} sonar(s) '
+        'under id $from',
+      );
       for (final sonar in legacySonars) {
         final sonarId = sonar['sonar_id'];
         final name = sonar['name'];
@@ -117,14 +157,53 @@ class SonarRepository {
           sonarId: sonarId,
           status: sonar['status'] ?? 'Active',
         );
-        await _deleteSonarFor(userId: legacyId, sonarId: sonarId);
+        await _deleteSonarFor(userId: from, sonarId: sonarId);
       }
       if (legacySonars.isNotEmpty) sonarsChanged.value++;
       return true;
     } catch (e) {
-      debugPrint('Sonar migration from legacy id failed, will retry: $e');
+      debugPrint('Sonar migration from $from to $to failed, will retry: $e');
       return false;
     }
+  }
+
+  static Future<bool> _migrateLegacyDeviceSonars({required String to}) async {
+    final legacyId = await _legacyDeviceId();
+    debugPrint('SonarRepository: legacy device id = $legacyId');
+    return _migrateSonarsBetween(from: legacyId, to: to);
+  }
+
+  // Migrates sonars from the anonymous, locally-generated id to the
+  // currently logged-in account's id. Intended to be called (fire-and-forget
+  // is fine - it tracks its own "done" flag and is safe to retry) right
+  // after a successful login/register, so an existing device's sonars
+  // follow the user into their new account. Not run automatically from
+  // `getUserId()` because it should only ever run once, right after
+  // authenticating, not on every call.
+  static Future<bool> migrateAnonymousSonars() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool(_accountMigratedPrefsKey) ?? false) return true;
+
+    final session = await AuthRepository.getSession();
+    if (session == null) return false;
+
+    final anonymousId = await _anonymousLocalId();
+    debugPrint(
+      'SonarRepository: checking for anonymous sonars under '
+      '$anonymousId to migrate to ${session.userId}',
+    );
+    final migrated = await _migrateSonarsBetween(
+      from: anonymousId,
+      to: session.userId,
+    );
+    debugPrint(
+      'SonarRepository: anonymous migration check '
+      '${migrated ? 'done' : 'failed, will retry'}',
+    );
+    if (migrated) {
+      await prefs.setBool(_accountMigratedPrefsKey, true);
+    }
+    return migrated;
   }
 
   static Future<List<Map<String, String>>> _fetchSonarsFor(
@@ -189,11 +268,7 @@ class SonarRepository {
     required String name,
     required String sonarId,
   }) async {
-    await _addSonarFor(
-      userId: await getUserId(),
-      name: name,
-      sonarId: sonarId,
-    );
+    await _addSonarFor(userId: await getUserId(), name: name, sonarId: sonarId);
     sonarsChanged.value++;
   }
 

@@ -1,5 +1,6 @@
 import JSZip from "jszip";
 import { addScan, type ScanData } from "./scanRepo";
+import { getSession } from "./auth";
 
 function findEntry(zip: JSZip, lowerName: string) {
   return Object.values(zip.files).find(
@@ -7,7 +8,17 @@ function findEntry(zip: JSZip, lowerName: string) {
   );
 }
 
-export async function importScanZip(file: File): Promise<ScanData> {
+// Same identifying name a re-import of the same file would produce, so it
+// can be checked against existing scans (via scanRepo's
+// findScanByFolderName) before actually reading/importing the zip.
+export function deriveFolderName(fileName: string): string {
+  return fileName.replace(/\.zip$/i, "") || `scan_${Date.now()}`;
+}
+
+export async function importScanZip(
+  file: File,
+  options?: { overwriteId?: string },
+): Promise<ScanData> {
   const zip = await JSZip.loadAsync(file);
 
   const sonarEntry = findEntry(zip, "sonar.csv");
@@ -22,7 +33,13 @@ export async function importScanZip(file: File): Promise<ScanData> {
     ? await bathymetryEntry.async("string")
     : "";
 
-  const folderName = file.name.replace(/\.zip$/i, "") || `scan_${Date.now()}`;
+  const folderName = deriveFolderName(file.name);
 
-  return addScan({ folderName, sonarCsv, bathymetryCsv });
+  return addScan({
+    folderName,
+    sonarCsv,
+    bathymetryCsv,
+    userId: getSession()?.user_id,
+    overwriteId: options?.overwriteId,
+  });
 }

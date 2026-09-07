@@ -1,11 +1,21 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'sonar_sensors.dart';
+import '../utils/auth_repository.dart';
 import '../utils/sonar_repository.dart';
 import '../utils/units_repository.dart';
 import '../utils/alert_prefs.dart';
 
+const _profilePhotoPathPrefsKey = 'chirp_profile_photo_path';
+
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  final VoidCallback onLoggedOut;
+
+  const SettingsScreen({super.key, required this.onLoggedOut});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -17,12 +27,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool dredgeWarnings = true;
 
   List<Map<String, String>> _sonars = [];
+  String? _accountEmail;
+  File? _profilePhoto;
 
   @override
   void initState() {
     super.initState();
     _loadSonars();
     _loadPreferences();
+    _loadAccount();
+    _loadProfilePhoto();
   }
 
   Future<void> _loadSonars() async {
@@ -30,6 +44,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final sonars = await SonarRepository.fetchSonars();
       if (mounted) setState(() => _sonars = sonars);
     } catch (_) {}
+  }
+
+  Future<void> _loadAccount() async {
+    final session = await AuthRepository.getSession();
+    if (mounted) setState(() => _accountEmail = session?.email);
+  }
+
+  Future<void> _loadProfilePhoto() async {
+    final prefs = await SharedPreferences.getInstance();
+    final path = prefs.getString(_profilePhotoPathPrefsKey);
+    if (path == null) return;
+    final file = File(path);
+    if (await file.exists() && mounted) {
+      setState(() => _profilePhoto = file);
+    }
+  }
+
+  Future<void> _pickProfilePhoto() async {
+    final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
+    if (picked == null) return;
+
+    try {
+      final docsDir = await getApplicationDocumentsDirectory();
+      final ext = picked.path.split('.').last;
+      final destPath =
+          '${docsDir.path}/profile_photo_${DateTime.now().millisecondsSinceEpoch}.$ext';
+      final savedFile = await File(picked.path).copy(destPath);
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_profilePhotoPathPrefsKey, savedFile.path);
+
+      if (mounted) setState(() => _profilePhoto = savedFile);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Could not set photo: $e')));
+      }
+    }
+  }
+
+  Future<void> _contactHq() async {
+    final uri = Uri.parse('mailto:support@chirpsonar.com');
+    final launched = await launchUrl(uri);
+    if (!launched && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open a mail client.')),
+      );
+    }
+  }
+
+  Future<void> _logOut() async {
+    await AuthRepository.clearSession();
+    SonarRepository.resetForLogout();
+    widget.onLoggedOut();
   }
 
   Future<void> _loadPreferences() async {
@@ -57,12 +126,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _setDredgeWarnings(bool value) async {
     setState(() => dredgeWarnings = value);
     await saveDredgeWarningsEnabled(value);
-  }
-
-  void _showComingSoon(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -93,18 +156,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Center(
               child: Stack(
                 children: [
-                  const CircleAvatar(
+                  CircleAvatar(
                     radius: 55,
                     backgroundColor: Colors.grey,
-                    child: Icon(Icons.person, color: Colors.white, size: 48),
+                    backgroundImage: _profilePhoto != null
+                        ? FileImage(_profilePhoto!)
+                        : null,
+                    child: _profilePhoto == null
+                        ? const Icon(
+                            Icons.person,
+                            color: Colors.white,
+                            size: 48,
+                          )
+                        : null,
                   ),
                   Positioned(
                     bottom: 0,
                     right: 0,
                     child: GestureDetector(
-                      onTap: () => _showComingSoon(
-                        "Profile photo editing isn't available yet.",
-                      ),
+                      onTap: _pickProfilePhoto,
                       child: Container(
                         height: 32,
                         width: 32,
@@ -125,9 +195,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            const Text(
-              'John Doe',
-              style: TextStyle(
+            Text(
+              _accountEmail ?? '',
+              style: const TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.bold,
                 color: Color(0xFF111827),
@@ -375,8 +445,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         Icons.chevron_right,
                         color: Colors.grey.shade400,
                       ),
-                      onTap: () =>
-                          _showComingSoon("Support contact isn't set up yet."),
+                      onTap: _contactHq,
                     ),
                     const Divider(height: 1),
                     ListTile(
@@ -408,8 +477,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               width: double.infinity,
               height: 54,
               child: OutlinedButton(
-                onPressed: () =>
-                    _showComingSoon('No account is currently signed in.'),
+                onPressed: _logOut,
                 style: OutlinedButton.styleFrom(
                   backgroundColor: Colors.white,
                   side: const BorderSide(

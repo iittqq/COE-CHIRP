@@ -1,10 +1,11 @@
-import { Box, List, ListItemButton, ListItemIcon, ListItemText, Typography } from "@mui/material";
+import { Box, IconButton, List, ListItemButton, ListItemIcon, ListItemText, Typography } from "@mui/material";
 import HomeRoundedIcon from "@mui/icons-material/HomeRounded";
 import ExploreRoundedIcon from "@mui/icons-material/ExploreRounded";
 import ArticleRoundedIcon from "@mui/icons-material/ArticleRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
-import SensorsRoundedIcon from "@mui/icons-material/SensorsRounded";
 import type { SvgIconComponent } from "@mui/icons-material";
+import menuIcon from "../assets/menu.svg";
+import cpraLogo from "../assets/CPRA-LOGO.jpg";
 
 export const SIDEBAR_WIDTH = 232;
 
@@ -19,9 +20,13 @@ interface SideNavBarProps {
   currentIndex: number;
   onChange: (index: number) => void;
   open: boolean;
+  // Only passed by the mobile overlay variant, which needs an in-drawer
+  // affordance to close since the drawer itself covers the header's
+  // hamburger button that would otherwise toggle it.
+  onClose?: () => void;
 }
 
-export default function SideNavBar({ currentIndex, onChange, open }: SideNavBarProps) {
+export default function SideNavBar({ currentIndex, onChange, open, onClose }: SideNavBarProps) {
   return (
     <Box
       sx={{
@@ -39,10 +44,15 @@ export default function SideNavBar({ currentIndex, onChange, open }: SideNavBarP
       }}
     >
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, px: 3, pb: 3 }}>
-        <SensorsRoundedIcon sx={{ color: "primary.main" }} />
-        <Typography sx={{ fontWeight: 800, fontSize: 18, color: "#111827" }}>
+        <Box component="img" src={cpraLogo} alt="CPRA" sx={{ width: 28, height: 28, borderRadius: "50%" }} />
+        <Typography sx={{ fontWeight: 800, fontSize: 18, color: "#111827", flex: 1 }}>
           Chirp Control
         </Typography>
+        {onClose && (
+          <IconButton onClick={onClose} size="small" aria-label="Close navigation">
+            <Box component="img" src={menuIcon} alt="" sx={{ width: 20, height: 20 }} />
+          </IconButton>
+        )}
       </Box>
       <List sx={{ display: "flex", flexDirection: "column", gap: 0.5, px: 1.5 }}>
         {TABS.map((tab, index) => {

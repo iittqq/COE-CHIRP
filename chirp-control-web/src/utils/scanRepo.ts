@@ -31,6 +31,10 @@ interface StoredScan {
   title: string;
   location: string;
   notes: string;
+  // Local-only metadata: which account created/imported this scan. No
+  // backend sync for scans exists yet - this just tags the record for
+  // future use.
+  userId?: string;
 }
 
 export interface ScanData {
@@ -43,6 +47,7 @@ export interface ScanData {
   time: string;
   duration: string;
   notes: string;
+  userId?: string;
 }
 
 function asNumber(value: CsvCell | undefined): number | null {
@@ -149,6 +154,7 @@ function toScanData(stored: StoredScan): ScanData {
     time: firstTimestamp !== null ? formatTime(firstTimestamp) : "Unknown time",
     duration: formatDurationFromSeconds(durationSeconds),
     notes: stored.notes,
+    userId: stored.userId,
   };
 }
 
@@ -163,19 +169,31 @@ export async function loadScans(): Promise<ScanData[]> {
     .sort((a, b) => a.folderName.localeCompare(b.folderName));
 }
 
+export async function findScanByFolderName(
+  folderName: string,
+): Promise<ScanData | undefined> {
+  const scans = await loadScans();
+  return scans.find((scan) => scan.folderName === folderName);
+}
+
 export async function addScan(params: {
   folderName: string;
   sonarCsv: string;
   bathymetryCsv: string;
+  userId?: string;
+  // Pass an existing scan's id to overwrite that record in place instead of
+  // creating a new one (used by the duplicate-import confirmation flow).
+  overwriteId?: string;
 }): Promise<ScanData> {
   const stored: StoredScan = {
-    id: crypto.randomUUID(),
+    id: params.overwriteId ?? crypto.randomUUID(),
     folderName: params.folderName,
     sonarCsv: params.sonarCsv,
     bathymetryCsv: params.bathymetryCsv,
     title: "",
     location: "",
     notes: "",
+    userId: params.userId,
   };
   await set(stored.id, stored, scansStore);
   return toScanData(stored);

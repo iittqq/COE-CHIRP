@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import {
   Avatar,
   Box,
@@ -29,8 +29,11 @@ import {
 } from "../utils/alertPrefs";
 import { loadIsMetric, saveIsMetric } from "../utils/unitsRepository";
 import { useSnackbar } from "../notifications";
+import { clearSession, getSession } from "../utils/auth";
 
 const PRIMARY = "#1E75EC";
+const PROFILE_PHOTO_KEY = "chirp_profile_photo";
+const SUPPORT_EMAIL = "support@chirpsonar.com";
 
 const sectionSx = {
   bgcolor: "#FFFFFF",
@@ -57,25 +60,50 @@ function IconBadge({ Icon }: { Icon: typeof SquareFootRoundedIcon }) {
 
 interface SettingsProps {
   onOpenSonarSensors: () => void;
+  onLogout: () => void;
 }
 
-export default function Settings({ onOpenSonarSensors }: SettingsProps) {
+export default function Settings({ onOpenSonarSensors, onLogout }: SettingsProps) {
   const { notify } = useSnackbar();
   const [isMetric, setIsMetric] = useState(true);
   const [sonarAlerts, setSonarAlerts] = useState(true);
   const [dredgeWarnings, setDredgeWarnings] = useState(true);
   const [sonars, setSonars] = useState<Sonar[]>([]);
+  const [photo, setPhoto] = useState<string | null>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+
+  const session = getSession();
 
   useEffect(() => {
     setIsMetric(loadIsMetric());
     setSonarAlerts(loadSonarAlertsEnabled());
     setDredgeWarnings(loadDredgeWarningsEnabled());
+    setPhoto(localStorage.getItem(PROFILE_PHOTO_KEY));
     fetchSonars()
       .then(setSonars)
       .catch(() => {});
   }, []);
 
-  const comingSoon = (message: string) => notify(message);
+  const handlePhotoChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      if (typeof dataUrl !== "string") return;
+      localStorage.setItem(PROFILE_PHOTO_KEY, dataUrl);
+      setPhoto(dataUrl);
+    };
+    reader.onerror = () => notify("Couldn't read that image.", { severity: "error" });
+    reader.readAsDataURL(file);
+  };
+
+  const handleLogout = () => {
+    clearSession();
+    onLogout();
+  };
 
   const setMetric = (value: boolean) => {
     setIsMetric(value);
@@ -106,11 +134,11 @@ export default function Settings({ onOpenSonarSensors }: SettingsProps) {
       }}
     >
       <Box sx={{ position: "relative" }}>
-        <Avatar sx={{ width: 110, height: 110, bgcolor: "grey.500" }}>
-          <PersonRoundedIcon sx={{ fontSize: 48 }} />
+        <Avatar src={photo ?? undefined} sx={{ width: 110, height: 110, bgcolor: "grey.500" }}>
+          {!photo && <PersonRoundedIcon sx={{ fontSize: 48 }} />}
         </Avatar>
         <IconButton
-          onClick={() => comingSoon("Profile photo editing isn't available yet.")}
+          onClick={() => photoInputRef.current?.click()}
           sx={{
             position: "absolute",
             bottom: 0,
@@ -124,9 +152,16 @@ export default function Settings({ onOpenSonarSensors }: SettingsProps) {
         >
           <EditRoundedIcon sx={{ color: "#FFFFFF", fontSize: 16 }} />
         </IconButton>
+        <input
+          ref={photoInputRef}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={handlePhotoChange}
+        />
       </Box>
       <Typography sx={{ fontSize: 22, fontWeight: 700, color: "#111827", mt: -1 }}>
-        John Doe
+        {session?.email ?? "Signed in"}
       </Typography>
 
       <Box sx={{ width: "100%" }}>
@@ -232,7 +267,12 @@ export default function Settings({ onOpenSonarSensors }: SettingsProps) {
         </Typography>
         <Box sx={sectionSx}>
           <List disablePadding>
-            <ListItemButton sx={{ py: 1.5 }} onClick={() => comingSoon("Support contact isn't set up yet.")}>
+            <ListItemButton
+              sx={{ py: 1.5 }}
+              onClick={() => {
+                window.location.href = `mailto:${SUPPORT_EMAIL}`;
+              }}
+            >
               <ListItemIcon sx={{ minWidth: 48 }}>
                 <IconBadge Icon={SupportAgentRoundedIcon} />
               </ListItemIcon>
@@ -252,7 +292,7 @@ export default function Settings({ onOpenSonarSensors }: SettingsProps) {
       </Box>
 
       <Box
-        onClick={() => comingSoon("No account is currently signed in.")}
+        onClick={handleLogout}
         sx={{
           width: "100%",
           height: 54,
