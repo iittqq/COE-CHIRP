@@ -1,7 +1,8 @@
 import { Box, IconButton, List, ListItemButton, ListItemIcon, ListItemText, Typography } from "@mui/material";
 import HomeRoundedIcon from "@mui/icons-material/HomeRounded";
 import ExploreRoundedIcon from "@mui/icons-material/ExploreRounded";
-import ArticleRoundedIcon from "@mui/icons-material/ArticleRounded";
+import RadarRoundedIcon from "@mui/icons-material/RadarRounded";
+import TableChartRoundedIcon from "@mui/icons-material/TableChartRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import type { SvgIconComponent } from "@mui/icons-material";
 import menuIcon from "../assets/menu.svg";
@@ -12,7 +13,8 @@ export const SIDEBAR_WIDTH = 232;
 const TABS: { icon: SvgIconComponent; label: string }[] = [
   { icon: HomeRoundedIcon, label: "Home" },
   { icon: ExploreRoundedIcon, label: "Scans" },
-  { icon: ArticleRoundedIcon, label: "History" },
+  { icon: RadarRoundedIcon, label: "Sonar Data" },
+  { icon: TableChartRoundedIcon, label: "ISP Data" },
   { icon: SettingsRoundedIcon, label: "Settings" },
 ];
 

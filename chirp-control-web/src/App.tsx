@@ -20,17 +20,21 @@ import Settings from "./screens/Settings";
 import ScanAnalysis from "./screens/ScanAnalysis";
 import CompareScans from "./screens/CompareScans";
 import SonarSensors from "./screens/SonarSensors";
+import IspData from "./screens/IspData";
+import IspAnalysis from "./screens/IspAnalysis";
 import AuthScreen from "./screens/Auth";
 import type { ScanData } from "./utils/scanRepo";
+import type { IspRecord } from "./utils/ispRepo";
 import { getSession, clearSession, type AccountSession } from "./utils/auth";
 import { migrateLegacySonarsIfNeeded } from "./utils/sonarRepository";
 
 type DrillInRoute =
   | { screen: "scanAnalysis"; scan: ScanData }
   | { screen: "compareScans"; scans: ScanData[] }
-  | { screen: "sonarSensors" };
+  | { screen: "sonarSensors" }
+  | { screen: "ispAnalysis"; record: IspRecord };
 
-const TAB_TITLES = ["Home", "Scans", "History", "Settings"];
+const TAB_TITLES = ["Home", "Scans", "Sonar Data", "ISP Data", "Settings"];
 const CONTENT_MAX_WIDTH = 1400;
 
 function AppShell({ onLogout }: { onLogout: () => void }) {
@@ -105,6 +109,12 @@ function AppShell({ onLogout }: { onLogout: () => void }) {
           />
         ) : route?.screen === "sonarSensors" ? (
           <SonarSensors onBack={popRoute} onToggleNav={() => setNavOpen((o) => !o)} />
+        ) : route?.screen === "ispAnalysis" ? (
+          <IspAnalysis
+            record={route.record}
+            onBack={popRoute}
+            onToggleNav={() => setNavOpen((o) => !o)}
+          />
         ) : (
           <>
             <AppBar position="static" sx={{ position: "relative", zIndex: 1250 }}>
@@ -130,7 +140,7 @@ function AppShell({ onLogout }: { onLogout: () => void }) {
               sx={{
                 flex: 1,
                 overflow: "auto",
-                bgcolor: activeTab === 2 ? "#F5F6FA" : "#FFFFFF",
+                bgcolor: activeTab === 2 || activeTab === 3 ? "#F5F6FA" : "#FFFFFF",
               }}
             >
               <Box sx={{ maxWidth: CONTENT_MAX_WIDTH, mx: "auto", height: "100%" }}>
@@ -147,6 +157,9 @@ function AppShell({ onLogout }: { onLogout: () => void }) {
                   />
                 </Box>
                 <Box sx={{ display: activeTab === 3 ? "block" : "none", height: "100%" }}>
+                  <IspData onOpenRecord={(record) => setRoute({ screen: "ispAnalysis", record })} />
+                </Box>
+                <Box sx={{ display: activeTab === 4 ? "block" : "none", height: "100%" }}>
                   <Settings
                     onOpenSonarSensors={() => setRoute({ screen: "sonarSensors" })}
                     onLogout={onLogout}

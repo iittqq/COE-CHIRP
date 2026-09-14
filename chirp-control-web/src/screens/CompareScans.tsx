@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Box, IconButton, Typography } from "@mui/material";
 import ChevronLeftRoundedIcon from "@mui/icons-material/ChevronLeftRounded";
 import ShareOutlinedIcon from "@mui/icons-material/ShareOutlined";
+import PictureAsPdfOutlinedIcon from "@mui/icons-material/PictureAsPdfOutlined";
 import DepthLineChart from "../components/DepthLineChart";
 import type { ScanData } from "../utils/scanRepo";
 import { depthUnitLabel, loadIsMetric } from "../utils/unitsRepository";
@@ -12,6 +13,15 @@ import {
   mergeGappedSeriesForComparison,
 } from "../utils/depthChart";
 import { useSnackbar } from "../notifications";
+import {
+  addHeading,
+  addImagesInRow,
+  addLabelValueLine,
+  addSubtext,
+  addWrappedText,
+  captureNode,
+  newReportDoc,
+} from "../utils/exportPdf";
 import menuIcon from "../assets/menu.svg";
 
 // Categorical palette, slots 1-5 (validated adjacent-pair ordering).
@@ -26,6 +36,9 @@ interface CompareScansProps {
 export default function CompareScans({ scans, onBack, onToggleNav }: CompareScansProps) {
   const { notify } = useSnackbar();
   const [isMetric, setIsMetric] = useState(true);
+  const [exporting, setExporting] = useState(false);
+  const yAxisPanelRef = useRef<HTMLDivElement>(null);
+  const chartBodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setIsMetric(loadIsMetric());
@@ -72,6 +85,60 @@ export default function CompareScans({ scans, onBack, onToggleNav }: CompareScan
     }
   };
 
+  const handleExportPdf = async () => {
+    setExporting(true);
+    try {
+      const [yAxisImg, chartImg] = await Promise.all([
+        captureNode(yAxisPanelRef.current),
+        captureNode(chartBodyRef.current),
+      ]);
+
+      const doc = newReportDoc();
+      let y = 50;
+      y = addHeading(doc, "Scan Comparison", y, 18);
+      y = addSubtext(doc, `Generated ${new Date().toLocaleString()}`, y);
+
+      y = addLabelValueLine(
+        doc,
+        "Depth Change",
+        change !== null ? `${change.toFixed(2)} ${unit}` : "—",
+        y,
+      );
+      y += 10;
+
+      y = addHeading(doc, "Scans", y, 13);
+      scans.forEach((scan, i) => {
+        const scanStats = perScanStats[i];
+        const settled = settledDepths[i];
+        y = addLabelValueLine(
+          doc,
+          scan.title,
+          scanStats
+            ? `avg ${scanStats.avg.toFixed(1)}  min ${scanStats.min.toFixed(1)}  max ${scanStats.max.toFixed(1)}  settled ${
+                settled !== null ? settled.toFixed(1) : "—"
+              } (${unit})`
+            : "No bathymetry stats available",
+          y,
+        );
+      });
+      y += 10;
+
+      y = addHeading(doc, "Bathymetry Data", y, 13);
+      if (yAxisImg || chartImg) {
+        addImagesInRow(doc, [yAxisImg, chartImg], y);
+      } else {
+        addWrappedText(doc, "No bathymetry chart data", y);
+      }
+
+      doc.save("scan-comparison.pdf");
+      notify("PDF exported", { severity: "success" });
+    } catch (err) {
+      notify(`Export failed: ${(err as Error).message}`, { severity: "error" });
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column", bgcolor: "#F5F6FA" }}>
       <Box
@@ -92,6 +159,9 @@ export default function CompareScans({ scans, onBack, onToggleNav }: CompareScan
         <Typography sx={{ flex: 1, textAlign: "center", fontWeight: 700 }}>
           Scan Analysis
         </Typography>
+        <IconButton onClick={handleExportPdf} disabled={exporting} aria-label="Export to PDF">
+          <PictureAsPdfOutlinedIcon />
+        </IconButton>
         <IconButton onClick={handleShare}>
           <ShareOutlinedIcon />
         </IconButton>
@@ -248,6 +318,8 @@ export default function CompareScans({ scans, onBack, onToggleNav }: CompareScan
                   connectNulls: false,
                   label: scan.title,
                 }))}
+                yAxisPanelRef={yAxisPanelRef}
+                chartBodyRef={chartBodyRef}
               />
             )}
           </Box>

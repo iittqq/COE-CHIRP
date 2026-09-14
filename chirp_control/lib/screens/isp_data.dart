@@ -1,34 +1,33 @@
 import 'package:flutter/material.dart';
 import 'package:ionicons_plus/ionicons_plus.dart';
-import 'chart.dart';
-import '../utils/scan_repo.dart';
-import '../utils/import_scan.dart';
-import 'compare_scan.dart';
+import 'isp_analysis.dart';
+import '../utils/isp_repo.dart';
+import '../utils/import_isp.dart';
 
-class HistoryPage extends StatefulWidget {
-  const HistoryPage({super.key});
+class IspDataPage extends StatefulWidget {
+  const IspDataPage({super.key});
 
   @override
-  State<HistoryPage> createState() => _HistoryPageState();
+  State<IspDataPage> createState() => _IspDataPageState();
 }
 
-class _HistoryPageState extends State<HistoryPage> {
+class _IspDataPageState extends State<IspDataPage> {
   bool selecting = false;
   final Set<int> picked = {};
 
-  late Future<List<ScanData>> futureScans;
-  List<ScanData> allScans = [];
+  late Future<List<IspData>> futureRecords;
+  List<IspData> allRecords = [];
   String searchText = '';
 
   @override
   void initState() {
     super.initState();
-    futureScans = ScanRepository.loadScans();
+    futureRecords = IspRepository.loadIspRecords();
   }
 
-  void reloadScans() {
+  void reloadRecords() {
     setState(() {
-      futureScans = ScanRepository.loadScans();
+      futureRecords = IspRepository.loadIspRecords();
     });
   }
 
@@ -41,7 +40,14 @@ class _HistoryPageState extends State<HistoryPage> {
     });
   }
 
-  void selectScan(int index) {
+  void openRecord(IspData record) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => IspAnalysisPage(record: record)),
+    );
+  }
+
+  void selectRecord(int index) {
     if (selecting) {
       setState(() {
         if (picked.contains(index)) {
@@ -51,50 +57,31 @@ class _HistoryPageState extends State<HistoryPage> {
         }
       });
     } else {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => ScanAnalysisPage(scan: allScans[index]),
-        ),
-      );
+      openRecord(allRecords[index]);
     }
   }
 
   void openSelected() {
-    if (picked.isEmpty) return;
-
-    final chosen = picked.map((i) => allScans[i]).toList();
-
-    if (chosen.length == 1) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => ScanAnalysisPage(scan: chosen.first)),
-      );
-      return;
-    }
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => CompareScansPage(scans: chosen)),
-    );
+    if (picked.length != 1) return;
+    openRecord(allRecords[picked.first]);
   }
 
-  Future<void> editSelectedScan() async {
+  Future<void> editSelectedRecord() async {
     if (picked.length != 1) return;
 
     final index = picked.first;
-    final scan = allScans[index];
-    final controller = TextEditingController(text: scan.title);
+    final record = allRecords[index];
+    final controller = TextEditingController(text: record.title);
 
     final newName = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Rename Scan'),
+        title: const Text('Rename ISP Data'),
         content: TextField(
           controller: controller,
           autofocus: true,
           decoration: const InputDecoration(
-            hintText: 'Enter new scan name',
+            hintText: 'Enter new name',
             border: OutlineInputBorder(),
           ),
         ),
@@ -114,19 +101,19 @@ class _HistoryPageState extends State<HistoryPage> {
     if (newName == null || newName.isEmpty) return;
 
     try {
-      await ScanRepository.renameScan(scan, newName);
+      await IspRepository.renameIspRecord(record, newName);
 
       setState(() {
         picked.clear();
         selecting = false;
       });
 
-      reloadScans();
+      reloadRecords();
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Scan renamed successfully')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Renamed successfully')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -135,15 +122,15 @@ class _HistoryPageState extends State<HistoryPage> {
     }
   }
 
-  Future<void> deleteScan() async {
+  Future<void> deleteSelected() async {
     if (picked.isEmpty) return;
 
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete scans?'),
+        title: const Text('Delete ISP data?'),
         content: const Text(
-          'Are you sure you want to delete selected scan(s)?',
+          'Are you sure you want to delete the selected record(s)?',
         ),
         actions: [
           TextButton(
@@ -164,7 +151,7 @@ class _HistoryPageState extends State<HistoryPage> {
 
     try {
       for (final i in toDelete) {
-        await ScanRepository.deleteScan(allScans[i]);
+        await IspRepository.deleteIspRecord(allRecords[i]);
       }
 
       setState(() {
@@ -172,12 +159,12 @@ class _HistoryPageState extends State<HistoryPage> {
         selecting = false;
       });
 
-      reloadScans();
+      reloadRecords();
 
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Selected scans deleted')));
+      ).showSnackBar(const SnackBar(content: Text('Selected records deleted')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -186,16 +173,16 @@ class _HistoryPageState extends State<HistoryPage> {
     }
   }
 
-  Future<void> importScan() async {
+  Future<void> uploadIsp() async {
     try {
-      await importScanZip();
+      await importIspFile();
 
-      reloadScans();
+      reloadRecords();
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Scan imported successfully')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('ISP data imported successfully')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -214,12 +201,12 @@ class _HistoryPageState extends State<HistoryPage> {
       child: Row(
         children: [
           IconButton(
-            onPressed: importScan,
+            onPressed: uploadIsp,
             icon: const Icon(Icons.upload_file, color: Color(0xFF2563EB)),
           ),
           Expanded(
             child: Text(
-              selecting ? "${picked.length} Selected" : "SONAR DATA",
+              selecting ? "${picked.length} Selected" : "ISP DATA",
               textAlign: TextAlign.center,
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
             ),
@@ -264,7 +251,7 @@ class _HistoryPageState extends State<HistoryPage> {
                   });
                 },
                 decoration: const InputDecoration(
-                  hintText: "Search by date or location",
+                  hintText: "Search by name",
                   hintStyle: TextStyle(color: Color(0xFF9CA3AF), fontSize: 15),
                   border: InputBorder.none,
                   contentPadding: EdgeInsets.symmetric(vertical: 10),
@@ -286,8 +273,8 @@ class _HistoryPageState extends State<HistoryPage> {
           _buildHeader(),
           _buildSearchBar(),
           Expanded(
-            child: FutureBuilder<List<ScanData>>(
-              future: futureScans,
+            child: FutureBuilder<List<IspData>>(
+              future: futureRecords,
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
@@ -305,32 +292,31 @@ class _HistoryPageState extends State<HistoryPage> {
                   );
                 }
 
-                allScans = snapshot.data ?? [];
+                allRecords = snapshot.data ?? [];
 
-                final filtered = allScans.where((scan) {
+                final filtered = allRecords.where((record) {
                   final q = searchText.trim().toLowerCase();
                   if (q.isEmpty) return true;
 
-                  return scan.title.toLowerCase().contains(q) ||
-                      scan.location.toLowerCase().contains(q) ||
-                      scan.time.toLowerCase().contains(q) ||
-                      scan.duration.toLowerCase().contains(q);
+                  return record.title.toLowerCase().contains(q) ||
+                      record.fileName.toLowerCase().contains(q) ||
+                      record.location.toLowerCase().contains(q);
                 }).toList();
 
-                if (allScans.isEmpty) {
+                if (allRecords.isEmpty) {
                   return Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         const Text(
-                          'No scans found.',
+                          'No ISP data found.',
                           style: TextStyle(fontSize: 16),
                         ),
                         const SizedBox(height: 12),
                         ElevatedButton.icon(
-                          onPressed: importScan,
+                          onPressed: uploadIsp,
                           icon: const Icon(Icons.upload_file),
-                          label: const Text('Import Scan'),
+                          label: const Text('Upload ISP Data'),
                         ),
                       ],
                     ),
@@ -341,17 +327,17 @@ class _HistoryPageState extends State<HistoryPage> {
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 120),
                   children: [
                     const SizedBox(height: 12),
-                    for (final scan in filtered)
+                    for (final record in filtered)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 12),
-                        child: _ScanCard(
-                          title: scan.title,
-                          location: scan.location,
-                          timeText: scan.time,
-                          duration: scan.duration,
+                        child: _IspCard(
+                          title: record.title,
+                          timeText: record.time,
+                          rowCount: record.rows.length,
+                          columnCount: record.headers.length,
                           selecting: selecting,
-                          chosen: picked.contains(allScans.indexOf(scan)),
-                          onTap: () => selectScan(allScans.indexOf(scan)),
+                          chosen: picked.contains(allRecords.indexOf(record)),
+                          onTap: () => selectRecord(allRecords.indexOf(record)),
                         ),
                       ),
                     const SizedBox(height: 20),
@@ -372,7 +358,7 @@ class _HistoryPageState extends State<HistoryPage> {
                       height: 52,
                       width: 60,
                       child: ElevatedButton(
-                        onPressed: picked.length == 1 ? editSelectedScan : null,
+                        onPressed: picked.length == 1 ? editSelectedRecord : null,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF6B7280),
                           foregroundColor: Colors.white,
@@ -392,7 +378,7 @@ class _HistoryPageState extends State<HistoryPage> {
                       child: SizedBox(
                         height: 52,
                         child: ElevatedButton(
-                          onPressed: openSelected,
+                          onPressed: picked.length == 1 ? openSelected : null,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF2563EB),
                             foregroundColor: Colors.white,
@@ -400,10 +386,12 @@ class _HistoryPageState extends State<HistoryPage> {
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(14),
                             ),
+                            disabledBackgroundColor: const Color(0xFFE5E7EB),
+                            disabledForegroundColor: const Color(0xFF9CA3AF),
                           ),
-                          child: Text(
-                            "Analyze Selected (${picked.length})",
-                            style: const TextStyle(
+                          child: const Text(
+                            "Open",
+                            style: TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w700,
                             ),
@@ -416,7 +404,7 @@ class _HistoryPageState extends State<HistoryPage> {
                       height: 52,
                       width: 60,
                       child: ElevatedButton(
-                        onPressed: deleteScan,
+                        onPressed: deleteSelected,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFFDC2626),
                           foregroundColor: Colors.white,
@@ -438,20 +426,20 @@ class _HistoryPageState extends State<HistoryPage> {
   }
 }
 
-class _ScanCard extends StatelessWidget {
+class _IspCard extends StatelessWidget {
   final String title;
-  final String location;
   final String timeText;
-  final String duration;
+  final int rowCount;
+  final int columnCount;
   final bool selecting;
   final bool chosen;
   final VoidCallback onTap;
 
-  const _ScanCard({
+  const _IspCard({
     required this.title,
-    required this.location,
     required this.timeText,
-    required this.duration,
+    required this.rowCount,
+    required this.columnCount,
     required this.selecting,
     required this.chosen,
     required this.onTap,
@@ -497,7 +485,10 @@ class _ScanCard extends StatelessWidget {
                     color: const Color(0xFFEFF6FF),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Icon(Ionicons.radio, color: Color(0xFF2563EB)),
+                  child: const Icon(
+                    Icons.table_chart_outlined,
+                    color: Color(0xFF2563EB),
+                  ),
                 ),
               const SizedBox(width: 12),
               Expanded(
@@ -524,32 +515,13 @@ class _ScanCard extends StatelessWidget {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 8),
                     Text(
-                      location,
+                      "$rowCount rows · $columnCount columns",
                       style: const TextStyle(
                         fontSize: 12,
-                        color: Color(0xFF6B7280),
+                        color: Color(0xFF9CA3AF),
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        const Icon(
-                          Ionicons.time_outline,
-                          size: 14,
-                          color: Color(0xFF9CA3AF),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          duration,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFF9CA3AF),
-                          ),
-                        ),
-                        const Spacer(),
-                      ],
                     ),
                   ],
                 ),

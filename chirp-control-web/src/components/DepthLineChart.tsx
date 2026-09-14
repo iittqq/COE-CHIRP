@@ -1,3 +1,4 @@
+import { forwardRef, type Ref } from "react";
 import { Box, Typography } from "@mui/material";
 import { LineChart } from "@mui/x-charts/LineChart";
 import {
@@ -46,6 +47,10 @@ interface DepthLineChartProps {
   series: DepthChartSeries[];
   xValues: number[];
   unit: string;
+  // Attach to capture the y-axis panel and the full (unclipped) chart body
+  // separately for PDF export - see ScanAnalysis.tsx's exportPdf handler.
+  yAxisPanelRef?: Ref<HTMLDivElement>;
+  chartBodyRef?: Ref<HTMLDivElement>;
 }
 
 // Hand-rolled y-axis label column (plain absolutely-positioned text, not a
@@ -54,21 +59,17 @@ interface DepthLineChartProps {
 // unreliable here (a dummy all-null series doesn't get its ticks rendered),
 // so this sidesteps that entirely: it only needs the same height/margins/
 // domain as the scrollable chart to stay pixel-aligned with it.
-function FixedYAxisLabels({
-  minY,
-  maxY,
-  ticks,
-  label,
-}: {
-  minY: number;
-  maxY: number;
-  ticks: number[];
-  label: string;
-}) {
+const FixedYAxisLabels = forwardRef<
+  HTMLDivElement,
+  { minY: number; maxY: number; ticks: number[]; label: string }
+>(function FixedYAxisLabels({ minY, maxY, ticks, label }, ref) {
   const plotHeight = CHART_HEIGHT - MARGIN_TOP - MARGIN_BOTTOM - X_AXIS_HEIGHT;
 
   return (
-    <Box sx={{ flexShrink: 0, width: Y_PANEL_WIDTH, height: CHART_HEIGHT, display: "flex" }}>
+    <Box
+      ref={ref}
+      sx={{ flexShrink: 0, width: Y_PANEL_WIDTH, height: CHART_HEIGHT, display: "flex" }}
+    >
       <Box sx={{ width: 18, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <Typography
           sx={{
@@ -107,7 +108,7 @@ function FixedYAxisLabels({
       </Box>
     </Box>
   );
-}
+});
 
 // The y-axis renders as plain fixed text (see FixedYAxisLabels) outside the
 // horizontally-scrolling chart, so it never scrolls away. Tick VALUES for
@@ -116,7 +117,13 @@ function FixedYAxisLabels({
 // tickLabelInterval, instead of relying on the x-axis's default
 // collision-based auto-hiding, which is what caused ticks to disappear
 // unpredictably at odd widths.
-export default function DepthLineChart({ series, xValues, unit }: DepthLineChartProps) {
+export default function DepthLineChart({
+  series,
+  xValues,
+  unit,
+  yAxisPanelRef,
+  chartBodyRef,
+}: DepthLineChartProps) {
   const allY = series.flatMap((s) => s.data.filter((v): v is number => v !== null));
 
   if (allY.length === 0 || xValues.length === 0) {
@@ -155,9 +162,15 @@ export default function DepthLineChart({ series, xValues, unit }: DepthLineChart
 
   return (
     <Box sx={{ display: "flex" }}>
-      <FixedYAxisLabels minY={minY} maxY={maxY} ticks={yTicks} label={`Depth (${unit})`} />
+      <FixedYAxisLabels
+        ref={yAxisPanelRef}
+        minY={minY}
+        maxY={maxY}
+        ticks={yTicks}
+        label={`Depth (${unit})`}
+      />
       <Box sx={{ overflowX: "auto", flex: 1 }}>
-        <Box sx={{ width: fullWidth, height: CHART_HEIGHT }}>
+        <Box ref={chartBodyRef} sx={{ width: fullWidth, height: CHART_HEIGHT }}>
           <LineChart
             xAxis={[
               {

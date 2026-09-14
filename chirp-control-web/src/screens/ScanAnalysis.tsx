@@ -1,12 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Box, Button, IconButton, TextField, Typography } from "@mui/material";
 import ChevronLeftRoundedIcon from "@mui/icons-material/ChevronLeftRounded";
 import ShareOutlinedIcon from "@mui/icons-material/ShareOutlined";
+import PictureAsPdfOutlinedIcon from "@mui/icons-material/PictureAsPdfOutlined";
 import DepthLineChart from "../components/DepthLineChart";
 import { saveNotes, type ScanData } from "../utils/scanRepo";
 import { depthUnitLabel, loadIsMetric } from "../utils/unitsRepository";
 import { buildGappedSeries, calcDepthStats, computeDepthSpots } from "../utils/depthChart";
 import { useSnackbar } from "../notifications";
+import {
+  addHeading,
+  addImagesInRow,
+  addLabelValueLine,
+  addSubtext,
+  addWrappedText,
+  captureNode,
+  newReportDoc,
+} from "../utils/exportPdf";
 import menuIcon from "../assets/menu.svg";
 
 const SEQUENTIAL_BLUE = "#2a78d6";
@@ -22,6 +32,9 @@ export default function ScanAnalysis({ scan, onBack, onToggleNav }: ScanAnalysis
   const [isMetric, setIsMetric] = useState(true);
   const [notes, setNotes] = useState(scan.notes);
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const yAxisPanelRef = useRef<HTMLDivElement>(null);
+  const chartBodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setIsMetric(loadIsMetric());
@@ -64,6 +77,52 @@ export default function ScanAnalysis({ scan, onBack, onToggleNav }: ScanAnalysis
     }
   };
 
+  const handleExportPdf = async () => {
+    setExporting(true);
+    try {
+      const [yAxisImg, chartImg] = await Promise.all([
+        captureNode(yAxisPanelRef.current),
+        captureNode(chartBodyRef.current),
+      ]);
+
+      const doc = newReportDoc();
+      let y = 50;
+      y = addHeading(doc, scan.title, y, 18);
+      y = addSubtext(doc, `Generated ${new Date().toLocaleString()}`, y);
+
+      y = addLabelValueLine(doc, "Date, Time", scan.time, y);
+      y = addLabelValueLine(doc, "Duration", scan.duration, y);
+      y += 10;
+
+      y = addHeading(doc, "Depth Data", y, 13);
+      if (stats) {
+        y = addLabelValueLine(doc, `Avg (${unit})`, stats.avg.toFixed(1), y);
+        y = addLabelValueLine(doc, `Min (${unit})`, stats.min.toFixed(1), y);
+        y = addLabelValueLine(doc, `Max (${unit})`, stats.max.toFixed(1), y);
+      } else {
+        y = addWrappedText(doc, "No bathymetry stats available", y);
+      }
+      y += 10;
+
+      y = addHeading(doc, "Bathymetry Data", y, 13);
+      if (yAxisImg || chartImg) {
+        y = addImagesInRow(doc, [yAxisImg, chartImg], y);
+      } else {
+        y = addWrappedText(doc, "No bathymetry chart data", y);
+      }
+
+      y = addHeading(doc, "Notes", y, 13);
+      addWrappedText(doc, notes, y);
+
+      doc.save(`${scan.title || "scan"}-analysis.pdf`);
+      notify("PDF exported", { severity: "success" });
+    } catch (err) {
+      notify(`Export failed: ${(err as Error).message}`, { severity: "error" });
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column", bgcolor: "#F5F6FA" }}>
       <Box
@@ -84,6 +143,9 @@ export default function ScanAnalysis({ scan, onBack, onToggleNav }: ScanAnalysis
         <Typography sx={{ flex: 1, textAlign: "center", fontWeight: 700 }}>
           Scan Analysis
         </Typography>
+        <IconButton onClick={handleExportPdf} disabled={exporting} aria-label="Export to PDF">
+          <PictureAsPdfOutlinedIcon />
+        </IconButton>
         <IconButton onClick={handleShare}>
           <ShareOutlinedIcon />
         </IconButton>
@@ -189,6 +251,8 @@ export default function ScanAnalysis({ scan, onBack, onToggleNav }: ScanAnalysis
               xValues={series.x}
               unit={unit}
               series={[{ id: scan.id, data: series.y, color: SEQUENTIAL_BLUE }]}
+              yAxisPanelRef={yAxisPanelRef}
+              chartBodyRef={chartBodyRef}
             />
           </Box>
 

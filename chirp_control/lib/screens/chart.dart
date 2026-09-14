@@ -1,7 +1,13 @@
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:ionicons_plus/ionicons_plus.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import '../utils/scan_repo.dart';
 import '../utils/units_repository.dart';
 
@@ -17,8 +23,11 @@ class ScanAnalysisPage extends StatefulWidget {
 class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
   final ScrollController _scrollCtrl = ScrollController();
   final TextEditingController _notesCtrl = TextEditingController();
+  final GlobalKey _yAxisKey = GlobalKey();
+  final GlobalKey _chartKey = GlobalKey();
   bool _isMetric = true;
   bool _savingNote = false;
+  bool _exportingPdf = false;
 
   @override
   void initState() {
@@ -48,6 +57,105 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
             'Shared from Chirp',
       ),
     );
+  }
+
+  Future<Uint8List?> _captureBoundary(GlobalKey key) async {
+    final boundary =
+        key.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+    if (boundary == null) return null;
+    final image = await boundary.toImage(pixelRatio: 2.0);
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    return byteData?.buffer.asUint8List();
+  }
+
+  Future<void> _exportPdf() async {
+    setState(() => _exportingPdf = true);
+    try {
+      final scan = widget.scan;
+      final stats = _calcDepthStats(scan.bathymetryRows);
+      final spots = _graphSpots(scan.bathymetryRows);
+
+      Uint8List? yAxisBytes;
+      Uint8List? chartBytes;
+      if (spots.isNotEmpty) {
+        yAxisBytes = await _captureBoundary(_yAxisKey);
+        chartBytes = await _captureBoundary(_chartKey);
+      }
+
+      final doc = pw.Document();
+
+      doc.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          build: (context) => [
+            pw.Text(
+              scan.title.isEmpty ? 'Scan Analysis' : scan.title,
+              style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 4),
+            pw.Text(
+              'Generated ${DateTime.now()}',
+              style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+            ),
+            pw.SizedBox(height: 16),
+            pw.Text('Scan Name: ${scan.title}'),
+            pw.Text('Date, Time: ${scan.time}'),
+            pw.Text('Duration: ${scan.duration}'),
+            pw.SizedBox(height: 12),
+            if (stats != null)
+              pw.Text(
+                'Avg: ${stats['avg']!.toStringAsFixed(1)} ${depthUnitLabel(_isMetric)}   '
+                'Min: ${stats['min']!.toStringAsFixed(1)} ${depthUnitLabel(_isMetric)}   '
+                'Max: ${stats['max']!.toStringAsFixed(1)} ${depthUnitLabel(_isMetric)}',
+                style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+              )
+            else
+              pw.Text('No bathymetry stats available'),
+            pw.SizedBox(height: 16),
+            pw.Text(
+              'Bathymetry Data',
+              style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 8),
+            if (chartBytes != null)
+              pw.Row(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  if (yAxisBytes != null)
+                    pw.Image(pw.MemoryImage(yAxisBytes), height: 130),
+                  pw.Expanded(
+                    child: pw.Image(
+                      pw.MemoryImage(chartBytes),
+                      fit: pw.BoxFit.scaleDown,
+                      height: 130,
+                    ),
+                  ),
+                ],
+              )
+            else
+              pw.Text('No bathymetry chart data'),
+            pw.SizedBox(height: 16),
+            pw.Text(
+              'Notes',
+              style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 6),
+            pw.Text(_notesCtrl.text.isEmpty ? '—' : _notesCtrl.text),
+          ],
+        ),
+      );
+
+      final bytes = await doc.save();
+      final safeTitle = scan.title.trim().isEmpty ? 'scan' : scan.title.trim();
+      await Printing.sharePdf(bytes: bytes, filename: '$safeTitle-analysis.pdf');
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('PDF export failed: $e')));
+    } finally {
+      if (mounted) setState(() => _exportingPdf = false);
+    }
   }
 
   double? _toDouble(dynamic value) {
@@ -232,52 +340,58 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
       current += interval;
     }
 
-    return SizedBox(
-      width: 52,
-      height: graphHeight,
-      child: Row(
-        children: [
-          SizedBox(
-            width: 20,
-            child: Center(
-              child: RotatedBox(
-                quarterTurns: 3,
-                child: Text(
-                  yLabel,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF6B7280),
-                    fontWeight: FontWeight.w600,
+    return RepaintBoundary(
+      key: _yAxisKey,
+      child: Container(
+        color: Colors.white,
+        child: SizedBox(
+          width: 52,
+          height: graphHeight,
+          child: Row(
+            children: [
+              SizedBox(
+                width: 20,
+                child: Center(
+                  child: RotatedBox(
+                    quarterTurns: 3,
+                    child: Text(
+                      yLabel,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF6B7280),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
-          Expanded(
-            child: Stack(
-              children: labels.map((value) {
-                final ratio = (value - minY) / (maxY - minY);
-                double top = graphHeight - (ratio * graphHeight) - 8;
+              Expanded(
+                child: Stack(
+                  children: labels.map((value) {
+                    final ratio = (value - minY) / (maxY - minY);
+                    double top = graphHeight - (ratio * graphHeight) - 8;
 
-                if (top < 0) top = 0;
-                if (top > graphHeight - 16) top = graphHeight - 16;
+                    if (top < 0) top = 0;
+                    if (top > graphHeight - 16) top = graphHeight - 16;
 
-                return Positioned(
-                  right: 4,
-                  top: top,
-                  child: Text(
-                    (-value).toStringAsFixed(0),
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF6B7280),
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
+                    return Positioned(
+                      right: 4,
+                      top: top,
+                      child: Text(
+                        (-value).toStringAsFixed(0),
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF6B7280),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -360,7 +474,10 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
                         child: SingleChildScrollView(
                           controller: _scrollCtrl,
                           scrollDirection: Axis.horizontal,
-                          child: SizedBox(
+                          child: RepaintBoundary(
+                            key: _chartKey,
+                            child: Container(
+                            color: Colors.white,
                             width: fullWidth,
                             height: graphHeight,
                             child: LineChart(
@@ -443,6 +560,7 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
                                     )
                                     .toList(),
                               ),
+                            ),
                             ),
                           ),
                         ),
@@ -558,6 +676,16 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         actions: [
+          IconButton(
+            icon: _exportingPdf
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.picture_as_pdf_outlined),
+            onPressed: _exportingPdf ? null : _exportPdf,
+          ),
           IconButton(
             icon: const Icon(Ionicons.share_outline),
             onPressed: _shareScan,

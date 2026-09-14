@@ -14,25 +14,30 @@ import {
 } from "@mui/material";
 import UploadFileRoundedIcon from "@mui/icons-material/UploadFileRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
-import SensorsRoundedIcon from "@mui/icons-material/SensorsRounded";
-import AccessTimeRoundedIcon from "@mui/icons-material/AccessTimeRounded";
+import TableChartRoundedIcon from "@mui/icons-material/TableChartRounded";
 import ChevronRightRoundedIcon from "@mui/icons-material/ChevronRightRounded";
 import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
-import { deleteScan, findScanByFolderName, loadScans, renameScan, type ScanData } from "../utils/scanRepo";
-import { deriveFolderName, importScanZip } from "../utils/importScan";
+import {
+  deleteIspRecord,
+  findIspRecordByFileName,
+  formatIspUploadedTime,
+  loadIspRecords,
+  renameIspRecord,
+  type IspRecord,
+} from "../utils/ispRepo";
+import { deriveFileName, importIspFile } from "../utils/importIsp";
 import { useSnackbar } from "../notifications";
 
-interface HistoryProps {
-  onOpenScan: (scan: ScanData) => void;
-  onCompareScans: (scans: ScanData[]) => void;
+interface IspDataProps {
+  onOpenRecord: (record: IspRecord) => void;
 }
 
-export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
+export default function IspData({ onOpenRecord }: IspDataProps) {
   const { notify } = useSnackbar();
 
-  const [allScans, setAllScans] = useState<ScanData[]>([]);
+  const [allRecords, setAllRecords] = useState<IspRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchText, setSearchText] = useState("");
@@ -41,7 +46,9 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [pendingImport, setPendingImport] = useState<{ file: File; existing: ScanData } | null>(null);
+  const [pendingImport, setPendingImport] = useState<{ file: File; existing: IspRecord } | null>(
+    null,
+  );
 
   const importInputRef = useRef<HTMLInputElement>(null);
 
@@ -49,7 +56,7 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
     setLoading(true);
     setError(null);
     try {
-      setAllScans(await loadScans());
+      setAllRecords(await loadIspRecords());
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -68,47 +75,42 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
     });
   };
 
-  const selectScan = (scan: ScanData) => {
+  const selectRecord = (record: IspRecord) => {
     if (selecting) {
       setPicked((prev) => {
         const next = new Set(prev);
-        if (next.has(scan.id)) next.delete(scan.id);
-        else next.add(scan.id);
+        if (next.has(record.id)) next.delete(record.id);
+        else next.add(record.id);
         return next;
       });
     } else {
-      onOpenScan(scan);
+      onOpenRecord(record);
     }
   };
 
-  const pickedScans = () => allScans.filter((scan) => picked.has(scan.id));
+  const pickedRecords = () => allRecords.filter((record) => picked.has(record.id));
 
   const openSelected = () => {
-    const chosen = pickedScans();
-    if (chosen.length === 0) return;
-    if (chosen.length === 1) {
-      onOpenScan(chosen[0]);
-      return;
-    }
-    onCompareScans(chosen);
+    if (picked.size !== 1) return;
+    onOpenRecord(pickedRecords()[0]);
   };
 
   const openRenameDialog = () => {
     if (picked.size !== 1) return;
-    setRenameValue(pickedScans()[0].title);
+    setRenameValue(pickedRecords()[0].title);
     setRenameOpen(true);
   };
 
   const submitRename = async () => {
-    const scan = pickedScans()[0];
+    const record = pickedRecords()[0];
     setRenameOpen(false);
-    if (!scan) return;
+    if (!record) return;
     try {
-      await renameScan(scan, renameValue);
+      await renameIspRecord(record, renameValue);
       setPicked(new Set());
       setSelecting(false);
       await reload();
-      notify("Scan renamed successfully", { severity: "success" });
+      notify("Renamed successfully", { severity: "success" });
     } catch (err) {
       notify(`Rename failed: ${(err as Error).message}`, { severity: "error" });
     }
@@ -117,11 +119,11 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
   const confirmDelete = async () => {
     setDeleteConfirmOpen(false);
     try {
-      for (const scan of pickedScans()) await deleteScan(scan);
+      for (const record of pickedRecords()) await deleteIspRecord(record);
       setPicked(new Set());
       setSelecting(false);
       await reload();
-      notify("Selected scans deleted", { severity: "success" });
+      notify("Selected records deleted", { severity: "success" });
     } catch (err) {
       notify(`Delete failed: ${(err as Error).message}`, { severity: "error" });
     }
@@ -129,9 +131,9 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
 
   const finishImport = async (file: File, overwriteId?: string) => {
     try {
-      await importScanZip(file, { overwriteId });
+      await importIspFile(file, { overwriteId });
       await reload();
-      notify("Scan imported successfully", { severity: "success" });
+      notify("ISP data imported successfully", { severity: "success" });
     } catch (err) {
       notify(`Import failed: ${(err as Error).message}`, { severity: "error" });
     }
@@ -142,7 +144,7 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
     e.target.value = "";
     if (!file) return;
 
-    const existing = await findScanByFolderName(deriveFolderName(file.name));
+    const existing = await findIspRecordByFileName(deriveFileName(file.name));
     if (existing) {
       setPendingImport({ file, existing });
       return;
@@ -159,14 +161,13 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
 
   const q = searchText.trim().toLowerCase();
   const filtered = q
-    ? allScans.filter(
-        (scan) =>
-          scan.title.toLowerCase().includes(q) ||
-          scan.location.toLowerCase().includes(q) ||
-          scan.time.toLowerCase().includes(q) ||
-          scan.duration.toLowerCase().includes(q),
+    ? allRecords.filter(
+        (record) =>
+          record.title.toLowerCase().includes(q) ||
+          record.fileName.toLowerCase().includes(q) ||
+          record.location.toLowerCase().includes(q),
       )
-    : allScans;
+    : allRecords;
 
   return (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
@@ -185,20 +186,26 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
           <UploadFileRoundedIcon sx={{ color: "primary.main" }} />
         </IconButton>
         <Typography sx={{ flex: 1, textAlign: "center", fontWeight: 700, fontSize: 18 }}>
-          {selecting ? `${picked.size} Selected` : "SONAR DATA"}
+          {selecting ? `${picked.size} Selected` : "ISP DATA"}
         </Typography>
         <Button onClick={toggleSelect} sx={{ fontWeight: 600 }}>
           {selecting ? "Cancel" : "Select"}
         </Button>
       </Box>
-      <input ref={importInputRef} type="file" accept=".zip" hidden onChange={handleImportFile} />
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".xlsx,.xls,.csv"
+        hidden
+        onChange={handleImportFile}
+      />
 
       <Box sx={{ bgcolor: "#FFFFFF", px: 2, pb: 1.25 }}>
         <Box sx={{ maxWidth: 1200, mx: "auto" }}>
           <TextField
             fullWidth
             size="small"
-            placeholder="Search by date or location"
+            placeholder="Search by name or location"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             slotProps={{
@@ -234,24 +241,27 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
           </Box>
         ) : error ? (
           <Typography sx={{ textAlign: "center", mt: 4 }}>Error: {error}</Typography>
-        ) : allScans.length === 0 ? (
+        ) : allRecords.length === 0 ? (
           <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1.5, mt: 6 }}>
-            <Typography sx={{ fontSize: 16 }}>No scans found.</Typography>
+            <Typography sx={{ fontSize: 16 }}>No ISP data uploaded yet.</Typography>
+            <Typography sx={{ fontSize: 13, color: "text.secondary", textAlign: "center", maxWidth: 320 }}>
+              Upload an Instrumented Settlement Plate spreadsheet (.xlsx or .csv) to view it here.
+            </Typography>
             <Button
               variant="contained"
               startIcon={<UploadFileRoundedIcon />}
               onClick={() => importInputRef.current?.click()}
             >
-              Import Scan
+              Upload ISP Data
             </Button>
           </Box>
         ) : (
-          filtered.map((scan) => {
-            const chosen = picked.has(scan.id);
+          filtered.map((record) => {
+            const chosen = picked.has(record.id);
             return (
               <Box
-                key={scan.id}
-                onClick={() => selectScan(scan)}
+                key={record.id}
+                onClick={() => selectRecord(record)}
                 sx={{
                   bgcolor: "#FFFFFF",
                   borderRadius: "14px",
@@ -291,27 +301,24 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
                       justifyContent: "center",
                     }}
                   >
-                    <SensorsRoundedIcon sx={{ color: "primary.main" }} />
+                    <TableChartRoundedIcon sx={{ color: "primary.main" }} />
                   </Box>
                 )}
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1 }}>
                     <Typography sx={{ fontWeight: 800, fontSize: 14 }} noWrap>
-                      {scan.title}
+                      {record.title}
                     </Typography>
                     <Typography sx={{ fontSize: 12, color: "#9CA3AF", flexShrink: 0 }}>
-                      {scan.time}
+                      {formatIspUploadedTime(record)}
                     </Typography>
                   </Box>
                   <Typography sx={{ fontSize: 12, color: "#6B7280", mt: 0.5 }}>
-                    {scan.location}
+                    {record.location}
                   </Typography>
-                  <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, mt: 1 }}>
-                    <AccessTimeRoundedIcon sx={{ fontSize: 14, color: "#9CA3AF" }} />
-                    <Typography sx={{ fontSize: 12, color: "#9CA3AF" }}>
-                      {scan.duration}
-                    </Typography>
-                  </Box>
+                  <Typography sx={{ fontSize: 12, color: "#9CA3AF", mt: 1 }}>
+                    {record.rows.length} rows · {record.headers.length} columns
+                  </Typography>
                 </Box>
                 {!selecting && <ChevronRightRoundedIcon sx={{ color: "#CBD5E1" }} />}
               </Box>
@@ -338,10 +345,11 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
           <Button
             fullWidth
             variant="contained"
+            disabled={picked.size !== 1}
             onClick={openSelected}
             sx={{ height: 52, fontSize: 15 }}
           >
-            Analyze Selected ({picked.size})
+            {picked.size === 1 ? "View Data" : "Select one record to view"}
           </Button>
           <Button
             variant="contained"
@@ -355,12 +363,12 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
       )}
 
       <Dialog open={renameOpen} onClose={() => setRenameOpen(false)} fullWidth maxWidth="xs">
-        <DialogTitle>Rename Scan</DialogTitle>
+        <DialogTitle>Rename ISP Data</DialogTitle>
         <DialogContent>
           <TextField
             autoFocus
             fullWidth
-            placeholder="Enter new scan name"
+            placeholder="Enter new name"
             value={renameValue}
             onChange={(e) => setRenameValue(e.target.value)}
             sx={{ mt: 1 }}
@@ -373,9 +381,9 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
       </Dialog>
 
       <Dialog open={deleteConfirmOpen} onClose={() => setDeleteConfirmOpen(false)} fullWidth maxWidth="xs">
-        <DialogTitle>Delete scans?</DialogTitle>
+        <DialogTitle>Delete ISP data?</DialogTitle>
         <DialogContent>
-          <Typography>Are you sure you want to delete selected scan(s)?</Typography>
+          <Typography>Are you sure you want to delete selected record(s)?</Typography>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDeleteConfirmOpen(false)}>Cancel</Button>
@@ -386,10 +394,10 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
       </Dialog>
 
       <Dialog open={!!pendingImport} onClose={() => setPendingImport(null)} fullWidth maxWidth="xs">
-        <DialogTitle>Scan already exists</DialogTitle>
+        <DialogTitle>File already imported</DialogTitle>
         <DialogContent>
           <Typography>
-            A scan named &quot;{pendingImport?.existing.title}&quot; already exists. Importing
+            A file named &quot;{pendingImport?.existing.fileName}&quot; already exists. Importing
             will overwrite it and its data cannot be recovered.
           </Typography>
         </DialogContent>

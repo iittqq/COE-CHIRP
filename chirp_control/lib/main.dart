@@ -4,6 +4,7 @@ import './screens/auth.dart';
 import './screens/home.dart';
 import './screens/scan.dart';
 import './screens/data.dart';
+import './screens/isp_data.dart';
 import './screens/settings.dart';
 import 'utils/auth_repository.dart';
 
@@ -113,12 +114,13 @@ class _MainNavigationState extends State<MainNavigation> {
     HomeScreen(onNavScan: () => _onNavTapped(1)),
     const DeviceControlPage(),
     const HistoryPage(),
+    const IspDataPage(),
     SettingsScreen(onLoggedOut: widget.onLoggedOut),
   ];
 
   @override
   Widget build(BuildContext context) {
-    final titles = ['Home', 'Scans', 'History', 'Settings'];
+    final titles = ['Home', 'Scans', 'Sonar Data', 'ISP Data', 'Settings'];
 
     return Scaffold(
       appBar: AppBar(title: Text(titles[_selectedIndex])),

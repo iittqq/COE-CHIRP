@@ -61,8 +61,9 @@ class BottomNavBar extends StatelessWidget {
         items: [
           item(Ionicons.home, 'HOME', 0),
           item(Ionicons.compass, 'SCANS', 1),
-          item(Ionicons.newspaper, 'HISTORY', 2),
-          item(Ionicons.settings, 'SETTINGS', 3),
+          item(Ionicons.radio, 'SONAR DATA', 2),
+          item(Icons.layers_outlined, 'ISP DATA', 3),
+          item(Ionicons.settings, 'SETTINGS', 4),
         ],
       ),
     );
