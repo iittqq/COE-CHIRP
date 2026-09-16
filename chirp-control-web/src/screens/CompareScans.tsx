@@ -11,9 +11,11 @@ import {
   calcSettledDepth,
   computeDepthSpots,
   mergeGappedSeriesForComparison,
+  timeLabel,
 } from "../utils/depthChart";
 import { useSnackbar } from "../notifications";
 import {
+  addCenteredCaption,
   addHeading,
   addImagesInRow,
   addLabelValueLine,
@@ -21,6 +23,9 @@ import {
   addWrappedText,
   captureNode,
   newReportDoc,
+  pageContentWidth,
+  PRINT_CHART_WIDTH,
+  sliceImageHorizontally,
 } from "../utils/exportPdf";
 import menuIcon from "../assets/menu.svg";
 
@@ -39,6 +44,8 @@ export default function CompareScans({ scans, onBack, onToggleNav }: CompareScan
   const [exporting, setExporting] = useState(false);
   const yAxisPanelRef = useRef<HTMLDivElement>(null);
   const chartBodyRef = useRef<HTMLDivElement>(null);
+  const overviewYAxisPanelRef = useRef<HTMLDivElement>(null);
+  const overviewChartBodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setIsMetric(loadIsMetric());
@@ -88,9 +95,11 @@ export default function CompareScans({ scans, onBack, onToggleNav }: CompareScan
   const handleExportPdf = async () => {
     setExporting(true);
     try {
-      const [yAxisImg, chartImg] = await Promise.all([
+      const [yAxisImg, chartImg, overviewYAxisImg, overviewChartImg] = await Promise.all([
         captureNode(yAxisPanelRef.current),
         captureNode(chartBodyRef.current),
+        captureNode(overviewYAxisPanelRef.current),
+        captureNode(overviewChartBodyRef.current),
       ]);
 
       const doc = newReportDoc();
@@ -124,10 +133,34 @@ export default function CompareScans({ scans, onBack, onToggleNav }: CompareScan
       y += 10;
 
       y = addHeading(doc, "Bathymetry Data", y, 13);
-      if (yAxisImg || chartImg) {
-        addImagesInRow(doc, [yAxisImg, chartImg], y);
+      if (overviewYAxisImg || overviewChartImg) {
+        y = addImagesInRow(doc, [overviewYAxisImg, overviewChartImg], y);
+        addCenteredCaption(doc, "Scan Duration (mm:ss)", y);
       } else {
         addWrappedText(doc, "No bathymetry chart data", y);
+      }
+
+      // Full-resolution comparison chart, paginated as extra pages after the
+      // main report so long scans stay readable instead of being crushed
+      // into the compact overview above.
+      if (chartImg) {
+        const maxSliceWidth = Math.max(150, pageContentWidth(doc) - (yAxisImg?.width ?? 0) - 8);
+        const slices = await sliceImageHorizontally(chartImg, maxSliceWidth);
+        if (slices.length > 1) {
+          const maxX = Math.max(...merged.x, 1);
+          slices.forEach((slice, i) => {
+            doc.addPage();
+            let py = 50;
+            py = addHeading(doc, `Bathymetry Detail (${i + 1}/${slices.length})`, py, 13);
+            py = addSubtext(
+              doc,
+              `${timeLabel(maxX * slice.startFraction)} – ${timeLabel(maxX * slice.endFraction)}`,
+              py,
+            );
+            py = addImagesInRow(doc, [yAxisImg, slice], py);
+            addCenteredCaption(doc, "Scan Duration (mm:ss)", py);
+          });
+        }
       }
 
       doc.save("scan-comparison.pdf");
@@ -325,6 +358,27 @@ export default function CompareScans({ scans, onBack, onToggleNav }: CompareScan
           </Box>
         </Box>
       </Box>
+
+      {/* Off-screen compact render used only to capture a single-page-
+          friendly chart image for PDF export - see handleExportPdf. */}
+      {hasData && (
+        <Box sx={{ position: "fixed", top: -10000, left: -10000, pointerEvents: "none" }} aria-hidden>
+          <DepthLineChart
+            xValues={merged.x}
+            unit={unit}
+            series={scans.map((scan, i) => ({
+              id: scan.id,
+              data: merged.seriesY[i],
+              color: SERIES_COLORS[i % SERIES_COLORS.length],
+              connectNulls: false,
+              label: scan.title,
+            }))}
+            yAxisPanelRef={overviewYAxisPanelRef}
+            chartBodyRef={overviewChartBodyRef}
+            printWidth={PRINT_CHART_WIDTH}
+          />
+        </Box>
+      )}
     </Box>
   );
 }

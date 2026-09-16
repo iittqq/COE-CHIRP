@@ -6,9 +6,10 @@ import PictureAsPdfOutlinedIcon from "@mui/icons-material/PictureAsPdfOutlined";
 import DepthLineChart from "../components/DepthLineChart";
 import { saveNotes, type ScanData } from "../utils/scanRepo";
 import { depthUnitLabel, loadIsMetric } from "../utils/unitsRepository";
-import { buildGappedSeries, calcDepthStats, computeDepthSpots } from "../utils/depthChart";
+import { buildGappedSeries, calcDepthStats, computeDepthSpots, timeLabel } from "../utils/depthChart";
 import { useSnackbar } from "../notifications";
 import {
+  addCenteredCaption,
   addHeading,
   addImagesInRow,
   addLabelValueLine,
@@ -16,6 +17,9 @@ import {
   addWrappedText,
   captureNode,
   newReportDoc,
+  pageContentWidth,
+  PRINT_CHART_WIDTH,
+  sliceImageHorizontally,
 } from "../utils/exportPdf";
 import menuIcon from "../assets/menu.svg";
 
@@ -35,6 +39,8 @@ export default function ScanAnalysis({ scan, onBack, onToggleNav }: ScanAnalysis
   const [exporting, setExporting] = useState(false);
   const yAxisPanelRef = useRef<HTMLDivElement>(null);
   const chartBodyRef = useRef<HTMLDivElement>(null);
+  const overviewYAxisPanelRef = useRef<HTMLDivElement>(null);
+  const overviewChartBodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setIsMetric(loadIsMetric());
@@ -80,9 +86,11 @@ export default function ScanAnalysis({ scan, onBack, onToggleNav }: ScanAnalysis
   const handleExportPdf = async () => {
     setExporting(true);
     try {
-      const [yAxisImg, chartImg] = await Promise.all([
+      const [yAxisImg, chartImg, overviewYAxisImg, overviewChartImg] = await Promise.all([
         captureNode(yAxisPanelRef.current),
         captureNode(chartBodyRef.current),
+        captureNode(overviewYAxisPanelRef.current),
+        captureNode(overviewChartBodyRef.current),
       ]);
 
       const doc = newReportDoc();
@@ -105,14 +113,38 @@ export default function ScanAnalysis({ scan, onBack, onToggleNav }: ScanAnalysis
       y += 10;
 
       y = addHeading(doc, "Bathymetry Data", y, 13);
-      if (yAxisImg || chartImg) {
-        y = addImagesInRow(doc, [yAxisImg, chartImg], y);
+      if (overviewYAxisImg || overviewChartImg) {
+        y = addImagesInRow(doc, [overviewYAxisImg, overviewChartImg], y);
+        y = addCenteredCaption(doc, "Scan Duration (mm:ss)", y);
       } else {
         y = addWrappedText(doc, "No bathymetry chart data", y);
       }
 
       y = addHeading(doc, "Notes", y, 13);
       addWrappedText(doc, notes, y);
+
+      // Full-resolution bathymetry chart, paginated as extra pages after the
+      // main report so long scans stay readable instead of being crushed
+      // into the compact overview above.
+      if (chartImg) {
+        const maxSliceWidth = Math.max(150, pageContentWidth(doc) - (yAxisImg?.width ?? 0) - 8);
+        const slices = await sliceImageHorizontally(chartImg, maxSliceWidth);
+        if (slices.length > 1) {
+          const maxX = Math.max(...series.x, 1);
+          slices.forEach((slice, i) => {
+            doc.addPage();
+            let py = 50;
+            py = addHeading(doc, `Bathymetry Detail (${i + 1}/${slices.length})`, py, 13);
+            py = addSubtext(
+              doc,
+              `${timeLabel(maxX * slice.startFraction)} – ${timeLabel(maxX * slice.endFraction)}`,
+              py,
+            );
+            py = addImagesInRow(doc, [yAxisImg, slice], py);
+            addCenteredCaption(doc, "Scan Duration (mm:ss)", py);
+          });
+        }
+      }
 
       doc.save(`${scan.title || "scan"}-analysis.pdf`);
       notify("PDF exported", { severity: "success" });
@@ -243,8 +275,12 @@ export default function ScanAnalysis({ scan, onBack, onToggleNav }: ScanAnalysis
           <Box
             sx={{ bgcolor: "#FFFFFF", borderRadius: "14px", border: "1px solid #E5E7EB", p: 1.75 }}
           >
-            <Typography sx={{ fontSize: 13, fontWeight: 800 }}>Bathymetry Data</Typography>
-            <Typography sx={{ fontSize: 12, color: "text.secondary", fontWeight: 600, mb: 1.5 }}>
+            <Typography sx={{ fontSize: 13, fontWeight: 800, textAlign: "center" }}>
+              Bathymetry Data
+            </Typography>
+            <Typography
+              sx={{ fontSize: 12, color: "text.secondary", fontWeight: 600, mb: 1.5, textAlign: "center" }}
+            >
               Bathymetry depth over scan time
             </Typography>
             <DepthLineChart
@@ -253,6 +289,19 @@ export default function ScanAnalysis({ scan, onBack, onToggleNav }: ScanAnalysis
               series={[{ id: scan.id, data: series.y, color: SEQUENTIAL_BLUE }]}
               yAxisPanelRef={yAxisPanelRef}
               chartBodyRef={chartBodyRef}
+            />
+          </Box>
+
+          {/* Off-screen compact render used only to capture a single-page-
+              friendly chart image for PDF export - see handleExportPdf. */}
+          <Box sx={{ position: "fixed", top: -10000, left: -10000, pointerEvents: "none" }} aria-hidden>
+            <DepthLineChart
+              xValues={series.x}
+              unit={unit}
+              series={[{ id: scan.id, data: series.y, color: SEQUENTIAL_BLUE }]}
+              yAxisPanelRef={overviewYAxisPanelRef}
+              chartBodyRef={overviewChartBodyRef}
+              printWidth={PRINT_CHART_WIDTH}
             />
           </Box>
 

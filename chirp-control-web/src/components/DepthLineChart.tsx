@@ -2,6 +2,7 @@ import { forwardRef, type Ref } from "react";
 import { Box, Typography } from "@mui/material";
 import { LineChart } from "@mui/x-charts/LineChart";
 import {
+  buildMinorTicks,
   buildTicksFromZero,
   buildTicksInRange,
   niceBottomStep,
@@ -29,10 +30,19 @@ const BASE_WIDTH = 640;
 // at least this many display units so it stays "zoomed out" with ~5-6 integer
 // ticks, matching how higher-variation scans render.
 const MIN_Y_SPAN = 5;
+// Each major interval gets this many minor ticks/gridlines between it and the
+// next - a static print chart needs these to read values precisely since
+// there's no hover tooltip to fall back on.
+const MINOR_TICKS_PER_MAJOR = 5;
+const MAJOR_TICK_LENGTH = 6;
+const MINOR_TICK_LENGTH = 3;
+const AXIS_LINE_COLOR = "#8f8e82";
+const MINOR_TICK_COLOR = "#c3c2b7";
 
 const axisLineSx = {
-  "& .MuiChartsAxis-line, & .MuiChartsAxis-tick": { stroke: "#c3c2b7" },
+  "& .MuiChartsAxis-line, & .MuiChartsAxis-tick": { stroke: "#8f8e82" },
   "& .MuiChartsAxis-tickLabel": { fill: "#52514e" },
+  "& .MuiChartsGrid-line": { stroke: "#e3e2d8", strokeWidth: 1 },
 };
 
 export interface DepthChartSeries {
@@ -51,6 +61,11 @@ interface DepthLineChartProps {
   // separately for PDF export - see ScanAnalysis.tsx's exportPdf handler.
   yAxisPanelRef?: Ref<HTMLDivElement>;
   chartBodyRef?: Ref<HTMLDivElement>;
+  // Renders at this fixed width instead of the interactive scroll-friendly
+  // sizing below, and recomputes x-tick density to match - used to capture a
+  // compact, single-page-friendly chart for PDF export (see PRINT_CHART_WIDTH
+  // in utils/exportPdf.ts).
+  printWidth?: number;
 }
 
 // Hand-rolled y-axis label column (plain absolutely-positioned text, not a
@@ -61,9 +76,11 @@ interface DepthLineChartProps {
 // domain as the scrollable chart to stay pixel-aligned with it.
 const FixedYAxisLabels = forwardRef<
   HTMLDivElement,
-  { minY: number; maxY: number; ticks: number[]; label: string }
->(function FixedYAxisLabels({ minY, maxY, ticks, label }, ref) {
+  { minY: number; maxY: number; ticks: number[]; minorTicks: number[]; label: string }
+>(function FixedYAxisLabels({ minY, maxY, ticks, minorTicks, label }, ref) {
   const plotHeight = CHART_HEIGHT - MARGIN_TOP - MARGIN_BOTTOM - X_AXIS_HEIGHT;
+  const tickCenter = (value: number) =>
+    MARGIN_TOP + (1 - (value - minY) / (maxY - minY)) * plotHeight;
 
   return (
     <Box
@@ -84,25 +101,60 @@ const FixedYAxisLabels = forwardRef<
         </Typography>
       </Box>
       <Box sx={{ position: "relative", flex: 1, height: CHART_HEIGHT }}>
+        {/* Axis line - the real MUI y-axis line/ticks are disabled (see the
+            comment above) since this hand-rolled column stands in for them. */}
+        <Box
+          sx={{
+            position: "absolute",
+            right: 0,
+            top: MARGIN_TOP,
+            height: plotHeight,
+            width: "1px",
+            bgcolor: AXIS_LINE_COLOR,
+          }}
+        />
+        {minorTicks.map((value) => (
+          <Box
+            key={`minor-${value}`}
+            sx={{
+              position: "absolute",
+              right: 0,
+              top: tickCenter(value),
+              width: MINOR_TICK_LENGTH,
+              height: "1px",
+              bgcolor: MINOR_TICK_COLOR,
+            }}
+          />
+        ))}
         {ticks.map((value) => {
-          const ratio = (value - minY) / (maxY - minY);
-          const rawTop = MARGIN_TOP + (1 - ratio) * plotHeight - 8;
-          const top = Math.max(0, Math.min(CHART_HEIGHT - 16, rawTop));
+          const center = tickCenter(value);
+          const top = Math.max(0, Math.min(CHART_HEIGHT - 16, center - 8));
           return (
-            <Typography
-              key={value}
-              sx={{
-                position: "absolute",
-                top,
-                right: 4,
-                fontSize: 11,
-                fontWeight: 600,
-                color: "#52514e",
-                lineHeight: "16px",
-              }}
-            >
-              {Math.abs(value).toFixed(0)}
-            </Typography>
+            <Box key={value}>
+              <Box
+                sx={{
+                  position: "absolute",
+                  right: 0,
+                  top: center,
+                  width: MAJOR_TICK_LENGTH,
+                  height: "1px",
+                  bgcolor: AXIS_LINE_COLOR,
+                }}
+              />
+              <Typography
+                sx={{
+                  position: "absolute",
+                  top,
+                  right: MAJOR_TICK_LENGTH + 2,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "#52514e",
+                  lineHeight: "16px",
+                }}
+              >
+                {Math.abs(value).toFixed(0)}
+              </Typography>
+            </Box>
           );
         })}
       </Box>
@@ -123,6 +175,7 @@ export default function DepthLineChart({
   unit,
   yAxisPanelRef,
   chartBodyRef,
+  printWidth,
 }: DepthLineChartProps) {
   const allY = series.flatMap((s) => s.data.filter((v): v is number => v !== null));
 
@@ -151,65 +204,90 @@ export default function DepthLineChart({
 
   const leftStep = niceLeftStep(maxY - minY);
   const yTicks = buildTicksInRange(minY, maxY, leftStep);
+  const minorYTicks = buildMinorTicks(minY, maxY, leftStep, MINOR_TICKS_PER_MAJOR);
 
-  let fullWidth = BASE_WIDTH;
-  fullWidth = Math.max(fullWidth, maxX * MIN_PX_PER_SECOND);
-  fullWidth = Math.max(fullWidth, xValues.length * MIN_PX_PER_POINT);
-  fullWidth = Math.min(fullWidth, MAX_CHART_WIDTH);
+  let fullWidth = printWidth ?? BASE_WIDTH;
+  if (printWidth === undefined) {
+    fullWidth = Math.max(fullWidth, maxX * MIN_PX_PER_SECOND);
+    fullWidth = Math.max(fullWidth, xValues.length * MIN_PX_PER_POINT);
+    fullWidth = Math.min(fullWidth, MAX_CHART_WIDTH);
+  }
 
   const bottomStep = niceBottomStep(maxX, fullWidth);
   const xTicks = buildTicksFromZero(maxX, bottomStep);
+  const minorXTicks = buildMinorTicks(0, maxX, bottomStep, MINOR_TICKS_PER_MAJOR);
+  const combinedXTicks = [...xTicks, ...minorXTicks].sort((a, b) => a - b);
+  const majorXTickSet = new Set(xTicks);
 
   return (
-    <Box sx={{ display: "flex" }}>
-      <FixedYAxisLabels
-        ref={yAxisPanelRef}
-        minY={minY}
-        maxY={maxY}
-        ticks={yTicks}
-        label={`Depth (${unit})`}
-      />
-      <Box sx={{ overflowX: "auto", flex: 1 }}>
-        <Box ref={chartBodyRef} sx={{ width: fullWidth, height: CHART_HEIGHT }}>
-          <LineChart
-            xAxis={[
-              {
-                data: xValues,
-                scaleType: "linear",
-                valueFormatter: (value: number) => timeLabel(value),
-                label: "Scan Duration (mm:ss)",
-                tickInterval: xTicks,
-                tickLabelInterval: () => true,
-                height: X_AXIS_HEIGHT,
-              },
-            ]}
-            yAxis={[
-              {
-                min: minY,
-                max: maxY,
-                tickInterval: yTicks,
-                disableLine: true,
-                disableTicks: true,
-                tickLabelInterval: () => false,
-                width: 0,
-              },
-            ]}
-            series={series.map((s) => ({
-              id: s.id,
-              data: s.data,
-              color: s.color,
-              label: s.label,
-              showMark: false,
-              connectNulls: s.connectNulls ?? false,
-              curve: "linear",
-              valueFormatter: (value: number | null) =>
-                value === null ? "" : `${(-value).toFixed(2)} ${unit}`,
-            }))}
-            margin={{ left: 4, right: 16, top: MARGIN_TOP, bottom: MARGIN_BOTTOM }}
-            grid={{ horizontal: true, vertical: true }}
-            hideLegend
-            sx={{ "& .MuiLineChart-line": { strokeWidth: 2 }, ...axisLineSx }}
-          />
+    <Box>
+      <Box sx={{ display: "flex" }}>
+        <FixedYAxisLabels
+          ref={yAxisPanelRef}
+          minY={minY}
+          maxY={maxY}
+          ticks={yTicks}
+          minorTicks={minorYTicks}
+          label={`Depth (${unit})`}
+        />
+        <Box sx={{ overflowX: "auto", flex: 1 }}>
+          <Box ref={chartBodyRef} sx={{ width: fullWidth, height: CHART_HEIGHT }}>
+            <LineChart
+              xAxis={[
+                {
+                  data: xValues,
+                  scaleType: "linear",
+                  valueFormatter: (value: number) => timeLabel(value),
+                  // Major+minor ticks share one array so the same values drive
+                  // both the tick marks and the vertical gridlines (which MUI
+                  // always derives from the axis's own tickInterval); only
+                  // the majors get a label via tickLabelInterval below.
+                  tickInterval: combinedXTicks,
+                  tickLabelInterval: (value: number) => majorXTickSet.has(value),
+                  height: X_AXIS_HEIGHT,
+                },
+              ]}
+              yAxis={[
+                {
+                  min: minY,
+                  max: maxY,
+                  // Ticks/line stay disabled - FixedYAxisLabels hand-rolls
+                  // those (labels, tick marks, axis line) instead (see the
+                  // comment above it). This axis exists only to drive the
+                  // horizontal gridlines, so its tickInterval includes minors
+                  // too even though FixedYAxisLabels only labels the majors.
+                  tickInterval: [...yTicks, ...minorYTicks],
+                  disableLine: true,
+                  disableTicks: true,
+                  tickLabelInterval: () => false,
+                  width: 0,
+                },
+              ]}
+              series={series.map((s) => ({
+                id: s.id,
+                data: s.data,
+                color: s.color,
+                label: s.label,
+                showMark: false,
+                connectNulls: s.connectNulls ?? false,
+                curve: "linear",
+                valueFormatter: (value: number | null) =>
+                  value === null ? "" : `${(-value).toFixed(2)} ${unit}`,
+              }))}
+              margin={{ left: 4, right: 16, top: MARGIN_TOP, bottom: MARGIN_BOTTOM }}
+              grid={{ horizontal: true, vertical: true }}
+              hideLegend
+              sx={{ "& .MuiLineChart-line": { strokeWidth: 2 }, ...axisLineSx }}
+            />
+          </Box>
+        </Box>
+      </Box>
+      <Box sx={{ display: "flex" }}>
+        <Box sx={{ width: Y_PANEL_WIDTH, flexShrink: 0 }} />
+        <Box sx={{ flex: 1, textAlign: "center" }}>
+          <Typography sx={{ fontSize: 12, fontWeight: 600, color: "#52514e" }}>
+            Scan Duration (mm:ss)
+          </Typography>
         </Box>
       </Box>
     </Box>

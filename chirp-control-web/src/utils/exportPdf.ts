@@ -51,6 +51,19 @@ export function addLabelValueLine(doc: jsPDF, label: string, value: string, y: n
   return y + 16;
 }
 
+// The x-axis title ("Scan Duration (mm:ss)") is rendered outside the
+// scrollable/captured chart node on screen (see DepthLineChart), so it isn't
+// part of chartImg - draw it as its own centered caption instead.
+export function addCenteredCaption(doc: jsPDF, text: string, y: number): number {
+  y = ensureSpace(doc, y, 16);
+  doc.setFontSize(10);
+  doc.setTextColor(107, 114, 128);
+  const width = pageContentWidth(doc);
+  doc.text(text, PDF_MARGIN + width / 2, y, { align: "center" });
+  doc.setTextColor(17, 24, 39);
+  return y + 16;
+}
+
 export function addWrappedText(doc: jsPDF, text: string, y: number, fontSize = 10): number {
   doc.setFontSize(fontSize);
   doc.setTextColor(17, 24, 39);
@@ -78,6 +91,72 @@ export async function captureNode(node: HTMLElement | null): Promise<CapturedIma
   if (!node) return null;
   const dataUrl = await toPng(node, { pixelRatio: 2, backgroundColor: "#ffffff" });
   return { dataUrl, width: node.offsetWidth, height: node.offsetHeight };
+}
+
+// Width to render DepthLineChart's printWidth chart at for the compact,
+// single-page overview in exported PDFs (tuned to fit next to the y-axis
+// panel on an A4 page without needing to shrink further).
+export const PRINT_CHART_WIDTH = 450;
+
+export interface ImageSlice extends CapturedImage {
+  startFraction: number;
+  endFraction: number;
+}
+
+function loadImageElement(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Failed to load captured chart image"));
+    image.src = src;
+  });
+}
+
+// Crops a wide captured chart image into page-width strips, each carrying
+// the [startFraction, endFraction) of the original width it covers, so a
+// long scan's chart can be paginated at full resolution across several pages
+// instead of being shrunk to fit one (see PRINT_CHART_WIDTH for the compact
+// single-page overview shown alongside it).
+export async function sliceImageHorizontally(
+  img: CapturedImage,
+  maxSliceWidth: number,
+): Promise<ImageSlice[]> {
+  if (img.width <= maxSliceWidth) {
+    return [{ ...img, startFraction: 0, endFraction: 1 }];
+  }
+
+  const bitmap = await loadImageElement(img.dataUrl);
+  const pixelScale = bitmap.naturalWidth / img.width;
+  const slices: ImageSlice[] = [];
+
+  for (let x = 0; x < img.width; x += maxSliceWidth) {
+    const sliceWidth = Math.min(maxSliceWidth, img.width - x);
+    const canvas = document.createElement("canvas");
+    canvas.width = sliceWidth * pixelScale;
+    canvas.height = img.height * pixelScale;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) continue;
+    ctx.drawImage(
+      bitmap,
+      x * pixelScale,
+      0,
+      sliceWidth * pixelScale,
+      img.height * pixelScale,
+      0,
+      0,
+      sliceWidth * pixelScale,
+      img.height * pixelScale,
+    );
+    slices.push({
+      dataUrl: canvas.toDataURL("image/png"),
+      width: sliceWidth,
+      height: img.height,
+      startFraction: x / img.width,
+      endFraction: (x + sliceWidth) / img.width,
+    });
+  }
+
+  return slices;
 }
 
 // Lays out captured images left-to-right (e.g. a fixed y-axis panel next to

@@ -233,6 +233,30 @@ export function buildTicksInRange(min: number, max: number, interval: number): n
   return ticks;
 }
 
+// Unlabeled ticks between each pair of major ticks (major step / subdivisions
+// apart), for the finer-grained axis marks/gridlines a static print chart
+// needs in place of on-screen hover detail. Indexes off an absolute k*minorStep
+// grid (not off buildTicksInRange's own start point) so "is this a major tick"
+// is a plain k % subdivisions check, with no float-equality comparison against
+// the separately-computed major tick values.
+export function buildMinorTicks(
+  min: number,
+  max: number,
+  majorStep: number,
+  subdivisions: number,
+): number[] {
+  if (subdivisions <= 1) return [];
+  const minorStep = majorStep / subdivisions;
+  const startK = Math.ceil(min / minorStep - 1e-9);
+  const endK = Math.floor(max / minorStep + 1e-9);
+  const ticks: number[] = [];
+  for (let k = startK; k <= endK; k++) {
+    if (((k % subdivisions) + subdivisions) % subdivisions === 0) continue;
+    ticks.push(k * minorStep);
+  }
+  return ticks;
+}
+
 export interface DepthStats {
   avg: number;
   min: number;
