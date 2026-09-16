@@ -66,6 +66,10 @@ interface DepthLineChartProps {
   // compact, single-page-friendly chart for PDF export (see PRINT_CHART_WIDTH
   // in utils/exportPdf.ts).
   printWidth?: number;
+  // Overrides for a taller/more-zoomed-in rendering - defaults keep the
+  // compact sizing used elsewhere (CompareScans, the PDF overview) unchanged.
+  height?: number;
+  pxPerSecond?: number;
 }
 
 // Hand-rolled y-axis label column (plain absolutely-positioned text, not a
@@ -76,16 +80,23 @@ interface DepthLineChartProps {
 // domain as the scrollable chart to stay pixel-aligned with it.
 const FixedYAxisLabels = forwardRef<
   HTMLDivElement,
-  { minY: number; maxY: number; ticks: number[]; minorTicks: number[]; label: string }
->(function FixedYAxisLabels({ minY, maxY, ticks, minorTicks, label }, ref) {
-  const plotHeight = CHART_HEIGHT - MARGIN_TOP - MARGIN_BOTTOM - X_AXIS_HEIGHT;
+  {
+    minY: number;
+    maxY: number;
+    ticks: number[];
+    minorTicks: number[];
+    label: string;
+    chartHeight: number;
+  }
+>(function FixedYAxisLabels({ minY, maxY, ticks, minorTicks, label, chartHeight }, ref) {
+  const plotHeight = chartHeight - MARGIN_TOP - MARGIN_BOTTOM - X_AXIS_HEIGHT;
   const tickCenter = (value: number) =>
     MARGIN_TOP + (1 - (value - minY) / (maxY - minY)) * plotHeight;
 
   return (
     <Box
       ref={ref}
-      sx={{ flexShrink: 0, width: Y_PANEL_WIDTH, height: CHART_HEIGHT, display: "flex" }}
+      sx={{ flexShrink: 0, width: Y_PANEL_WIDTH, height: chartHeight, display: "flex" }}
     >
       <Box sx={{ width: 18, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <Typography
@@ -100,7 +111,7 @@ const FixedYAxisLabels = forwardRef<
           {label}
         </Typography>
       </Box>
-      <Box sx={{ position: "relative", flex: 1, height: CHART_HEIGHT }}>
+      <Box sx={{ position: "relative", flex: 1, height: chartHeight }}>
         {/* Axis line - the real MUI y-axis line/ticks are disabled (see the
             comment above) since this hand-rolled column stands in for them. */}
         <Box
@@ -128,7 +139,7 @@ const FixedYAxisLabels = forwardRef<
         ))}
         {ticks.map((value) => {
           const center = tickCenter(value);
-          const top = Math.max(0, Math.min(CHART_HEIGHT - 16, center - 8));
+          const top = Math.max(0, Math.min(chartHeight - 16, center - 8));
           return (
             <Box key={value}>
               <Box
@@ -176,12 +187,16 @@ export default function DepthLineChart({
   yAxisPanelRef,
   chartBodyRef,
   printWidth,
+  height,
+  pxPerSecond,
 }: DepthLineChartProps) {
+  const chartHeight = height ?? CHART_HEIGHT;
+  const effectivePxPerSecond = pxPerSecond ?? MIN_PX_PER_SECOND;
   const allY = series.flatMap((s) => s.data.filter((v): v is number => v !== null));
 
   if (allY.length === 0 || xValues.length === 0) {
     return (
-      <Box sx={{ height: CHART_HEIGHT, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <Box sx={{ height: chartHeight, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <Typography>No bathymetry chart data</Typography>
       </Box>
     );
@@ -203,12 +218,18 @@ export default function DepthLineChart({
   const maxX = Math.max(...xValues, 1);
 
   const leftStep = niceLeftStep(maxY - minY);
+  // Snap the plotted range out to whole tick steps so the first and last
+  // major ticks land exactly on the top/bottom edges of the chart instead of
+  // leaving a partial gap above/below them.
+  minY = Math.floor(minY / leftStep) * leftStep;
+  maxY = Math.ceil(maxY / leftStep) * leftStep;
+  if (minY === maxY) maxY = minY + leftStep;
   const yTicks = buildTicksInRange(minY, maxY, leftStep);
   const minorYTicks = buildMinorTicks(minY, maxY, leftStep, MINOR_TICKS_PER_MAJOR);
 
   let fullWidth = printWidth ?? BASE_WIDTH;
   if (printWidth === undefined) {
-    fullWidth = Math.max(fullWidth, maxX * MIN_PX_PER_SECOND);
+    fullWidth = Math.max(fullWidth, maxX * effectivePxPerSecond);
     fullWidth = Math.max(fullWidth, xValues.length * MIN_PX_PER_POINT);
     fullWidth = Math.min(fullWidth, MAX_CHART_WIDTH);
   }
@@ -229,9 +250,10 @@ export default function DepthLineChart({
           ticks={yTicks}
           minorTicks={minorYTicks}
           label={`Depth (${unit})`}
+          chartHeight={chartHeight}
         />
         <Box sx={{ overflowX: "auto", flex: 1 }}>
-          <Box ref={chartBodyRef} sx={{ width: fullWidth, height: CHART_HEIGHT }}>
+          <Box ref={chartBodyRef} sx={{ width: fullWidth, height: chartHeight }}>
             <LineChart
               xAxis={[
                 {

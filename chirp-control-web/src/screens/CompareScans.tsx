@@ -336,7 +336,7 @@ export default function CompareScans({ scans, onBack, onToggleNav }: CompareScan
             </Typography>
             {!hasData ? (
               <Box
-                sx={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center" }}
+                sx={{ height: 450, display: "flex", alignItems: "center", justifyContent: "center" }}
               >
                 <Typography>No bathymetry chart data</Typography>
               </Box>
@@ -353,6 +353,8 @@ export default function CompareScans({ scans, onBack, onToggleNav }: CompareScan
                 }))}
                 yAxisPanelRef={yAxisPanelRef}
                 chartBodyRef={chartBodyRef}
+                height={450}
+                pxPerSecond={16}
               />
             )}
           </Box>

@@ -289,6 +289,8 @@ export default function ScanAnalysis({ scan, onBack, onToggleNav }: ScanAnalysis
               series={[{ id: scan.id, data: series.y, color: SEQUENTIAL_BLUE }]}
               yAxisPanelRef={yAxisPanelRef}
               chartBodyRef={chartBodyRef}
+              height={450}
+              pxPerSecond={16}
             />
           </Box>
 
