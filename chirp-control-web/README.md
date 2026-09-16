@@ -1,34 +1,73 @@
-# React + TypeScript + Vite
+# chirp-control-web
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A React web app that provides a browser-based alternative to the Chirp
+[mobile app](../chirp_control) for triggering sonar scans, browsing scan
+history, and analyzing bathymetry and ISP (Instrumented Settlement Plate)
+data. See the [top-level README](../README.md) for background on the
+overall Chirp system.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **Account login** — email/password auth against the same account Lambda
+  used by the mobile app; sessions are cached in `localStorage`.
+- **Home** — live system status, weather for the deployment site, and
+  starting a scan on a connected sonar.
+- **Scan** — drives a scan over a persistent WebSocket connection to the
+  on-site rooted Android device, watches for stalls, and surfaces sonar
+  alerts/dredge warnings while a scan is in progress.
+- **History** — browse, search, rename, delete, and import (`.zip`) past
+  scans; drill into a single scan or select several to compare.
+- **Scan analysis / Compare scans** — depth-over-time charts for one scan
+  or several overlaid, with PDF export.
+- **Sonar sensors** — register and manage the sonar devices the account can
+  control.
+- **ISP data** — import ISP spreadsheets (`.xlsx`), browse/search/rename
+  imported records, and analyze consolidation readings with charts and
+  notes, mirroring the mobile app's ISP workflow.
+- **Settings** — unit preference (metric/imperial), alert toggles, and
+  account management.
 
-## React Compiler
+## Tech stack
 
-The React Compiler is enabled on this template. See [this documentation](https://react.dev/learn/react-compiler) for more information.
+- [React 19](https://react.dev) + [TypeScript](https://www.typescriptlang.org/)
+- [Vite](https://vite.dev) for dev/build tooling, [oxlint](https://oxc.rs) for linting
+- [MUI](https://mui.com) (`@mui/material`, `@mui/x-charts`) for UI and charts
+- `idb-keyval` for local persistence of scans/ISP records
+- `jspdf` + `html-to-image` for PDF report export
+- `exceljs` for reading ISP `.xlsx` files
+- `jszip` / `pako` for decompressing scan archives and XML payloads
+- WebSocket + AWS API Gateway/Lambda for real-time scan control (same
+  backend as the mobile app — see [`chirp_control/lambda/`](../chirp_control/lambda))
 
-Note: This will impact Vite dev & build performances.
+## Getting started
 
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+pnpm install   # or npm install
+pnpm dev       # starts the Vite dev server
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Other scripts:
+
+```bash
+pnpm build     # type-check (tsc -b) and build for production
+pnpm lint      # run oxlint
+pnpm preview   # preview a production build locally
+```
+
+The app talks to a fixed AWS API Gateway/Lambda backend (account auth,
+sonar/device registry, and the scan-control WebSocket) — there's no local
+backend to run or `.env` file to configure.
+
+## Project layout
+
+```
+src/
+├── screens/      Top-level views (Home, Scan, History, ScanAnalysis,
+│                 CompareScans, SonarSensors, IspData, IspAnalysis,
+│                 Settings, Auth)
+├── components/   Shared UI (nav bar, charts, status cards)
+├── utils/        Data access and integrations: scan/ISP local repos,
+│                 auth, WebSocket controller, XML scan-automation
+│                 decoding, PDF export, weather, sonar registry
+└── notifications/ App-wide snackbar/toast provider
+```

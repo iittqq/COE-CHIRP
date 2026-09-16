@@ -69,8 +69,9 @@ The sonar hardware itself is a commercial, off-the-shelf transducer with proprie
 
 ```
 chirp/
-├── chirp_control/          Flutter mobile app (scan control, live data, settings)
+├── chirp_control/           Flutter mobile app for scan control and data analysis
 │   └── lambda/              AWS Lambda functions for remote control and sonar command handling
+├── chirp-control-web/       React web app to provide an alternative method for scan control and data analysis
 ├── data_visualization/      Jupyter notebooks and scripts for processing bathymetry scan data
 └── FishDeeperCsvLogs/       Raw CSV scan logs exported from the sonar's companion app
 ```
@@ -86,9 +87,13 @@ The system was validated in two phases:
 1. **Laboratory settling column tests** — a transparent settling column filled with water and site-specific dredged sediment, with the sonar mounted above and facing down, was used to calibrate the system and confirm it could track the mudline as it elevated during settling, even through heavy suspended slurry.
 2. **Local field deployment** — the fully assembled system (enclosure, solar power, step motor, and rooted phone) was deployed to validate end-to-end automation and resilience against intermittent cellular connectivity.
 
-| Depth accuracy across consistent sand heights                                                | Depth accuracy across consistent sand heights over time                                                                                |
-| -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| ![Average bathymetry depth vs. recorded depth](chirp_control/assets/bathymetry-constant.png) | ![CHIRP bathymetry depth over time, showing mudline elevation as sand height increases](chirp_control/assets/bathymetry-over-time.png) |
+### Depth accuracy across consistent sand heights
+
+![Average bathymetry depth vs. recorded depth](chirp_control/assets/bathymetry-constant.png)
+
+### Depth accuracy across consistent sand heights over time
+
+![CHIRP bathymetry depth over time, showing mudline elevation as sand height increases](chirp_control/assets/bathymetry-over-time.png)
 
 ![Local field deployment — solar-powered enclosure on a pole in shallow water](chirp_control/assets/local-deployment.jpg)
 
