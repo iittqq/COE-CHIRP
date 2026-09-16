@@ -95,7 +95,11 @@ The system was validated in two phases:
 
 ![CHIRP bathymetry depth over time, showing mudline elevation as sand height increases](chirp_control/assets/bathymetry-over-time.png)
 
+### Local field deployment at LSU lakes
+
 ![Local field deployment — solar-powered enclosure on a pole in shallow water](chirp_control/assets/local-deployment.jpg)
+
+### Sonar system installed at the dredging site
 
 ![Sonar mounted and running during a field deployment](chirp_control/assets/field-deployment.jpeg)
 
