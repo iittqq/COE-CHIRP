@@ -81,4 +81,5 @@ captures/
 
 FishDeeperCsvLogs/
 data_visualization/*.png
+!data_visualization/assets/*.png
 /*.xml

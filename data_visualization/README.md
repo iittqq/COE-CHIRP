@@ -4,7 +4,7 @@
 
 These tests were performed utilizing a 4 foot settling column with a yard stick taped to the side. The CHIRP sonar was mounted using the included attachment bolts tied with a string, suspending it at a consistent height while keeping it centered in the settling column — equal spacing from each side and a consistent height allowed for accurate measuring and observations.
 
-<img src="testing%20environment.png" alt="Testing Environment" height="400">
+<img src="assets/testing-environment.png" alt="Testing Environment" height="400">
 
 ## Overall Limitations
 
@@ -131,11 +131,11 @@ Expected: By following the file naming convention the jupyter notebook will prov
 
 #### Average Bathymetry Graph
 
-![Average Bathymetry Graph](Average%20Bathymetry%20Graph.png)
+![Average Bathymetry Graph](assets/average-bathymetry-graph.png)
 
 #### Overlapping Bathymetry Over Time Graph
 
-![Overlapping Bathymetry Graph](Overlapping%20File%20Graph.png)
+![Overlapping Bathymetry Graph](assets/overlapping-file-graph.png)
 
 ### Alternate Method
 
@@ -143,4 +143,4 @@ The final cell of the jupyter notebook allows for specifying the details of the 
 
 #### Independent File Graph
 
-![Independent File Graph](Independent%20File%20Graph.png)
+![Independent File Graph](assets/independent-file-graph.png)
