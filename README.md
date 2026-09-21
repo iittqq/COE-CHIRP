@@ -61,7 +61,8 @@ The sonar hardware itself is a commercial, off-the-shelf transducer with proprie
 | Layer               | Technology                                     | Purpose                                                                                                                                    |
 | ------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | Mobile app          | [Flutter](https://flutter.dev)                 | Cross-platform (iOS/Android) app for triggering scans and viewing bathymetry data — see [`chirp_control/`](chirp_control)                  |
-| Real-time transport | WebSockets                                     | Persistent, full-duplex channel between the mobile app and the on-site device                                                              |
+| Web app             | [React](https://react.dev) + [TypeScript](https://www.typescriptlang.org/) | Browser-based alternative for triggering scans and analyzing bathymetry/ISP data — see [`chirp-control-web/`](chirp-control-web)           |
+| Real-time transport | WebSockets                                     | Persistent, full-duplex channel between the mobile/web apps and the on-site device                                                          |
 | Cloud               | AWS (Lambda, API Gateway WebSockets, DynamoDB) | Hosts the WebSocket connection, routes commands, and stores device IDs and scan data — see [`chirp_control/lambda/`](chirp_control/lambda) |
 | Data analysis       | Python / Jupyter                               | Post-processing and visualization of bathymetry scan data — see [`data_visualization/`](data_visualization)                                |
 
@@ -78,7 +79,7 @@ chirp/
 
 ## Getting started
 
-The mobile app lives in [`chirp_control/`](chirp_control) — see that directory's README for Flutter setup instructions. Scan data processing notebooks live in [`data_visualization/`](data_visualization).
+The mobile app lives in [`chirp_control/`](chirp_control) — see that directory's README for Flutter setup instructions. The web app lives in [`chirp-control-web/`](chirp-control-web) — see that directory's README for setup instructions. Scan data processing notebooks live in [`data_visualization/`](data_visualization).
 
 ## Testing & validation
 
