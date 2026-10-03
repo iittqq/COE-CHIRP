@@ -1,10 +1,11 @@
+import 'config.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 // Same API Gateway base URL as SonarRepository - `/auth` is deployed as an
 // additional resource behind it.
-const _baseUrl = 'https://078qjv1849.execute-api.us-east-2.amazonaws.com';
+const _baseUrl = apiBaseUrl;
 
 const _emailPrefsKey = 'chirp_account_email';
 const _userIdPrefsKey = 'chirp_account_user_id';

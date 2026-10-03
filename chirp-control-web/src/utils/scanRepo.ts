@@ -1,10 +1,17 @@
-import { createStore, get, set, del, keys } from "idb-keyval";
+import { createStore, get, del, keys } from "idb-keyval";
+import { getSession } from "./auth";
+import { API_BASE_URL as BASE_URL } from "./config";
 
-// Browsers have no equivalent to the Flutter app's per-scan folder on the
-// local filesystem, so each scan is a single IndexedDB record instead. The
-// raw CSV text is kept (not pre-parsed) so re-parsing on load matches the
-// original app's behavior of reading straight from the CSV files each time.
-const scansStore = createStore("chirp-control-scans", "scans");
+// Scans live in the backend (see lambda/scan_handler.py): metadata in
+// DynamoDB, raw CSVs in S3. The raw CSV text is kept (not pre-parsed) so
+// re-parsing on load matches the original app's behavior of reading straight
+// from the CSV files each time.
+
+// Scans used to be stored only in this browser's IndexedDB. That store is
+// only read now, to upload leftovers to the backend on first load (see
+// migrateLocalScans). Don't remove it until old installs have had a chance
+// to migrate.
+const legacyScansStore = createStore("chirp-control-scans", "scans");
 
 export type CsvCell = string | number;
 export type CsvRow = CsvCell[];
@@ -31,10 +38,17 @@ interface StoredScan {
   title: string;
   location: string;
   notes: string;
-  // Local-only metadata: which account created/imported this scan. No
-  // backend sync for scans exists yet - this just tags the record for
-  // future use.
   userId?: string;
+}
+
+interface ApiScan {
+  id: string;
+  folderName: string;
+  title: string;
+  location: string;
+  notes: string;
+  sonarCsvUrl: string;
+  bathymetryCsvUrl: string;
 }
 
 export interface ScanData {
@@ -158,15 +172,114 @@ function toScanData(stored: StoredScan): ScanData {
   };
 }
 
+function requireUserId(): string {
+  const session = getSession();
+  if (!session) {
+    throw new Error("Scans require a logged-in account.");
+  }
+  return session.user_id;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${BASE_URL}${path}`, init);
+  if (!response.ok) {
+    throw new Error(`Scan request failed (${response.status}): ${await response.text()}`);
+  }
+  return (await response.json()) as T;
+}
+
+async function fetchCsv(url: string): Promise<string> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to download scan data (${response.status})`);
+  }
+  return response.text();
+}
+
+async function apiToScanData(scan: ApiScan, userId: string): Promise<ScanData> {
+  const [sonarCsv, bathymetryCsv] = await Promise.all([
+    fetchCsv(scan.sonarCsvUrl),
+    fetchCsv(scan.bathymetryCsvUrl),
+  ]);
+  return toScanData({
+    id: scan.id,
+    folderName: scan.folderName,
+    sonarCsv,
+    bathymetryCsv,
+    title: scan.title,
+    location: scan.location,
+    notes: scan.notes,
+    userId,
+  });
+}
+
+async function postScan(params: {
+  userId: string;
+  scanId?: string;
+  folderName: string;
+  sonarCsv: string;
+  bathymetryCsv: string;
+}): Promise<ApiScan> {
+  const { scan } = await request<{ scan: ApiScan }>("/scans", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_id: params.userId,
+      scan_id: params.scanId,
+      folder_name: params.folderName,
+      sonar_csv: params.sonarCsv,
+      bathymetry_csv: params.bathymetryCsv,
+    }),
+  });
+  return scan;
+}
+
+async function updateScan(
+  scanId: string,
+  fields: { title?: string; notes?: string },
+): Promise<void> {
+  await request("/scans", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_id: requireUserId(), scan_id: scanId, ...fields }),
+  });
+}
+
+// Uploads any scans still sitting in this browser's old IndexedDB store to
+// the logged-in account, then removes each local copy only after its upload
+// succeeded, so a failure (offline, API error) loses nothing and retries on
+// the next load.
+async function migrateLocalScans(userId: string): Promise<void> {
+  const localKeys = await keys(legacyScansStore);
+  for (const key of localKeys) {
+    const stored = await get<StoredScan>(key, legacyScansStore);
+    if (!stored) continue;
+    const scan = await postScan({
+      userId,
+      scanId: stored.id,
+      folderName: stored.folderName,
+      sonarCsv: stored.sonarCsv,
+      bathymetryCsv: stored.bathymetryCsv,
+    });
+    if (stored.title || stored.notes) {
+      await updateScan(scan.id, { title: stored.title, notes: stored.notes });
+    }
+    await del(key, legacyScansStore);
+  }
+}
+
 export async function loadScans(): Promise<ScanData[]> {
-  const allKeys = await keys(scansStore);
-  const stored = await Promise.all(
-    allKeys.map((key) => get<StoredScan>(key, scansStore)),
+  const userId = requireUserId();
+  try {
+    await migrateLocalScans(userId);
+  } catch {
+    // Leave local scans in place; migration retries on the next load.
+  }
+  const { scans } = await request<{ scans: ApiScan[] }>(
+    `/scans?user_id=${encodeURIComponent(userId)}`,
   );
-  return stored
-    .filter((s): s is StoredScan => !!s)
-    .map(toScanData)
-    .sort((a, b) => a.folderName.localeCompare(b.folderName));
+  const loaded = await Promise.all(scans.map((s) => apiToScanData(s, userId)));
+  return loaded.sort((a, b) => a.folderName.localeCompare(b.folderName));
 }
 
 export async function findScanByFolderName(
@@ -185,18 +298,24 @@ export async function addScan(params: {
   // creating a new one (used by the duplicate-import confirmation flow).
   overwriteId?: string;
 }): Promise<ScanData> {
-  const stored: StoredScan = {
-    id: params.overwriteId ?? crypto.randomUUID(),
+  const userId = params.userId ?? requireUserId();
+  const scan = await postScan({
+    userId,
+    scanId: params.overwriteId,
     folderName: params.folderName,
     sonarCsv: params.sonarCsv,
     bathymetryCsv: params.bathymetryCsv,
-    title: "",
-    location: "",
-    notes: "",
-    userId: params.userId,
-  };
-  await set(stored.id, stored, scansStore);
-  return toScanData(stored);
+  });
+  return toScanData({
+    id: scan.id,
+    folderName: scan.folderName,
+    sonarCsv: params.sonarCsv,
+    bathymetryCsv: params.bathymetryCsv,
+    title: scan.title,
+    location: scan.location,
+    notes: scan.notes,
+    userId,
+  });
 }
 
 export async function renameScan(
@@ -205,18 +324,16 @@ export async function renameScan(
 ): Promise<void> {
   const trimmed = newTitle.trim();
   if (!trimmed) return;
-
-  const stored = await get<StoredScan>(scan.id, scansStore);
-  if (!stored) return;
-  await set(scan.id, { ...stored, title: trimmed }, scansStore);
+  await updateScan(scan.id, { title: trimmed });
 }
 
 export async function saveNotes(scan: ScanData, notes: string): Promise<void> {
-  const stored = await get<StoredScan>(scan.id, scansStore);
-  if (!stored) return;
-  await set(scan.id, { ...stored, notes }, scansStore);
+  await updateScan(scan.id, { notes });
 }
 
 export async function deleteScan(scan: ScanData): Promise<void> {
-  await del(scan.id, scansStore);
+  await request(
+    `/scans?user_id=${encodeURIComponent(requireUserId())}&scan_id=${encodeURIComponent(scan.id)}`,
+    { method: "DELETE" },
+  );
 }

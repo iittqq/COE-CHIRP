@@ -2,7 +2,7 @@
 // the sonar CRUD endpoints (see sonarRepository.ts). Session identity is a
 // small JSON blob cached in localStorage - presence of that key means the
 // user is "logged in" for the purposes of gating the app shell in App.tsx.
-const BASE_URL = "https://078qjv1849.execute-api.us-east-2.amazonaws.com";
+import { API_BASE_URL as BASE_URL } from "./config";
 
 const SESSION_KEY = "chirp_account";
 

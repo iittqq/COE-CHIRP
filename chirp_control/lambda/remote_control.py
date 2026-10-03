@@ -7,14 +7,14 @@ import uiautomator2 as u2
 import gzip
 import base64
 from io import BytesIO
+import os
 import traceback
 
 # Must match the sonar_id this physical unit is registered under in the app.
 # Each deployed sonar needs its own unique DEVICE_ID.
 DEVICE_ID = "testAndroid"
-SERVER_URL = (
-    f"wss://ywh1uzhhk9.execute-api.us-east-2.amazonaws.com/test?deviceId={DEVICE_ID}"
-)
+# WebSocket API Gateway URL including stage, e.g. wss://<api-id>.execute-api.<region>.amazonaws.com/<stage>
+SERVER_URL = f"{os.environ['CHIRP_WS_URL']}?deviceId={DEVICE_ID}"
 APP = "eu.deeper.fishdeeper"
 
 

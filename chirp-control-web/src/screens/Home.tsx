@@ -14,6 +14,7 @@ import {
   Typography,
 } from "@mui/material";
 import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
+import FolderOpenRoundedIcon from "@mui/icons-material/FolderOpenRounded";
 import CloudUploadRoundedIcon from "@mui/icons-material/CloudUploadRounded";
 import CloudOffRoundedIcon from "@mui/icons-material/CloudOffRounded";
 import SensorsOffRoundedIcon from "@mui/icons-material/SensorsOffRounded";
@@ -23,7 +24,7 @@ import SystemStatusCard, { type SystemStatus } from "../components/SystemStatusC
 import { WebSocketService } from "../utils/websocketController";
 import { fetchSonars, sonarsChanged, type Sonar } from "../utils/sonarRepository";
 import { loadSonarAlertsEnabled } from "../utils/alertPrefs";
-import { deriveFolderName, importScanZip } from "../utils/importScan";
+import { deriveFolderName, FOLDER_INPUT_PROPS, importScanFiles } from "../utils/importScan";
 import { findScanByFolderName, type ScanData } from "../utils/scanRepo";
 import { useSnackbar } from "../notifications";
 import {
@@ -94,7 +95,7 @@ export default function Home({ onNavScan, onScanImported }: HomeProps) {
   const [locationQuery, setLocationQuery] = useState("");
   const [locationResults, setLocationResults] = useState<WeatherLocation[]>([]);
   const [locationSearching, setLocationSearching] = useState(false);
-  const [pendingImport, setPendingImport] = useState<{ file: File; existing: ScanData } | null>(null);
+  const [pendingImport, setPendingImport] = useState<{ files: File[]; existing: ScanData } | null>(null);
 
   const wsRef = useRef<WebSocketService | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -108,6 +109,7 @@ export default function Home({ onNavScan, onScanImported }: HomeProps) {
   const connectionStatusRef = useRef(connectionStatus);
   connectionStatusRef.current = connectionStatus;
   const importInputRef = useRef<HTMLInputElement>(null);
+  const importFolderInputRef = useRef<HTMLInputElement>(null);
   const sonarStatusesRef = useRef(sonarStatuses);
   sonarStatusesRef.current = sonarStatuses;
 
@@ -282,9 +284,9 @@ export default function Home({ onNavScan, onScanImported }: HomeProps) {
     loadWeather(location);
   };
 
-  const finishImport = async (file: File, overwriteId?: string) => {
+  const finishImport = async (files: File[], overwriteId?: string) => {
     try {
-      await importScanZip(file, { overwriteId });
+      await importScanFiles(files, { overwriteId });
       notify("Scan imported successfully!", { severity: "success" });
       onScanImported();
     } catch (err) {
@@ -293,23 +295,23 @@ export default function Home({ onNavScan, onScanImported }: HomeProps) {
   };
 
   const handleImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files ?? []);
     e.target.value = "";
-    if (!file) return;
+    if (files.length === 0) return;
 
-    const existing = await findScanByFolderName(deriveFolderName(file.name));
+    const existing = await findScanByFolderName(deriveFolderName(files));
     if (existing) {
-      setPendingImport({ file, existing });
+      setPendingImport({ files, existing });
       return;
     }
-    await finishImport(file);
+    await finishImport(files);
   };
 
   const confirmOverwriteImport = async () => {
     if (!pendingImport) return;
-    const { file, existing } = pendingImport;
+    const { files, existing } = pendingImport;
     setPendingImport(null);
-    await finishImport(file, existing.id);
+    await finishImport(files, existing.id);
   };
 
   return (
@@ -430,12 +432,29 @@ export default function Home({ onNavScan, onScanImported }: HomeProps) {
         onClick={() => importInputRef.current?.click()}
         sx={{ height: 60, fontSize: 18 }}
       >
-        Upload New Scan
+        Upload New Scan (.zip)
+      </Button>
+      <Button
+        fullWidth
+        variant="outlined"
+        size="large"
+        startIcon={<FolderOpenRoundedIcon />}
+        onClick={() => importFolderInputRef.current?.click()}
+        sx={{ height: 60, fontSize: 18, mt: 1 }}
+      >
+        Upload Scan Folder
       </Button>
       <input
         ref={importInputRef}
         type="file"
         accept=".zip"
+        hidden
+        onChange={handleImportFile}
+      />
+      <input
+        ref={importFolderInputRef}
+        type="file"
+        {...FOLDER_INPUT_PROPS}
         hidden
         onChange={handleImportFile}
       />

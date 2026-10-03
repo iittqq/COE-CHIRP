@@ -81,6 +81,48 @@ chirp/
 
 The mobile app lives in [`chirp_control/`](chirp_control) — see that directory's README for Flutter setup instructions. The web app lives in [`chirp-control-web/`](chirp-control-web) — see that directory's README for setup instructions. Scan data processing notebooks live in [`data_visualization/`](data_visualization).
 
+### Configuration after cloning or forking
+
+The apps and the on-site device script talk to an AWS backend, but the
+endpoint URLs are **not** committed to this repository. After cloning or
+forking you need to create your own (gitignored) config files before anything
+can connect:
+
+| Component | Copy this template | To this (gitignored) file | Values to fill in |
+| --------- | ------------------ | ------------------------- | ----------------- |
+| Web app ([`chirp-control-web/`](chirp-control-web)) | `.env.example` | `.env.local` | `VITE_API_BASE_URL` (HTTP API: `/auth`, `/sonars`, `/scans`) and `VITE_WS_URL` (scan-control WebSocket, including the stage) |
+| Mobile app ([`chirp_control/`](chirp_control)) | `env.example.json` | `env.json` | `API_BASE_URL` and `WS_URL`, same meaning as above |
+| On-site device script ([`chirp_control/lambda/remote_control.py`](chirp_control/lambda/remote_control.py)) | — | `CHIRP_WS_URL` environment variable | The same WebSocket URL (the script appends `?deviceId=...`) |
+
+```bash
+# Web app
+cp chirp-control-web/.env.example chirp-control-web/.env.local
+
+# Mobile app (pass the file at run/build time)
+cp chirp_control/env.example.json chirp_control/env.json
+flutter run --dart-define-from-file=env.json   # from chirp_control/
+
+# Device script
+export CHIRP_WS_URL="wss://<api-id>.execute-api.<region>.amazonaws.com/<stage>"
+```
+
+If you don't have a backend yet, you need to deploy your own in AWS. All the
+Lambda code, handler names, routes, tables and IAM permissions are documented in
+[`chirp_control/lambda/README.md`](chirp_control/lambda/README.md). In short:
+
+- **HTTP API** (API Gateway) with `/auth`, `/sonars` and `/scans` routes
+  (`GET`, `POST`, `PUT`, `DELETE` and CORS for `/scans`) pointing at the auth,
+  sonar and scan Lambdas.
+- **WebSocket API** (API Gateway) for scan control, with its connect,
+  disconnect and send-message Lambdas.
+- **DynamoDB tables** `ChirpUserAccounts` (key `email`), `RegisteredChirpSonars` (`user_id` + `sonar_id`), `ChirpScans` (`user_id` + `scan_id`) and `ChirpWebSocketConnections` (`deviceId`).
+- **S3 bucket** for scan CSVs, with its name set in the scan Lambda's
+  `SCANS_BUCKET` environment variable and a CORS rule allowing `GET`.
+
+The Lambdas currently hardcode the `us-east-2` region and the table names above,
+so change them in the code if you deploy elsewhere. Never commit your
+filled-in `.env.local` or `env.json`; `.gitignore` already excludes them.
+
 ## Testing & validation
 
 The system was validated in two phases:

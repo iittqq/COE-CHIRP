@@ -38,22 +38,30 @@ chirp_control/
    flutter pub get
    ```
 
-2. Point the app at your AWS backend. There's no `.env` file — these are hardcoded constants, so either edit them directly or swap them for `--dart-define` values:
-   - `lib/utils/websocket_controller.dart` — `apiUrl`, the WebSocket API Gateway invoke URL (including its stage, e.g. `.../test`)
-   - `lib/utils/sonar_repository.dart` — `_baseUrl`, the REST API Gateway invoke URL used for the sonar CRUD endpoints
-3. Run it:
+2. Point the app at your AWS backend. The endpoint URLs are supplied at build time and kept out of git:
 
    ```
-   flutter run
+   cp env.example.json env.json   # env.json is gitignored
    ```
 
-   Or build a release artifact with `flutter build apk` / `flutter build ios`.
+   Then fill in `env.json`:
+   - `API_BASE_URL` — the REST API Gateway invoke URL used for `/auth`, `/sonars` and `/scans`
+   - `WS_URL` — the WebSocket API Gateway invoke URL, including its stage (e.g. `.../test`)
+
+   These are read in `lib/utils/config.dart`.
+3. Run it, passing the config file:
+
+   ```
+   flutter run --dart-define-from-file=env.json
+   ```
+
+   Or build a release artifact with `flutter build apk --dart-define-from-file=env.json` / `flutter build ios --dart-define-from-file=env.json`.
 
 ## 2. AWS backend setup
 
 1. Create a DynamoDB table named `RegisteredChirpSonars` with partition key `user_id` (string) and sort key `sonar_id` (string) — `lambda/sonar_handler.py` reads and writes this table.
 2. Deploy `lambda/sonar_handler.py` as a Lambda function (Python runtime; it only needs `boto3`, which ships with the runtime) and put it behind an API Gateway with `GET /sonars`, `POST /sonars`, and `DELETE /sonars` routes. CORS headers are already returned by the handler.
-3. Stand up a WebSocket API Gateway (per the data-flow diagram in the [root README](../README.md)) with a Lambda integration that relays `commands` from the app to the connected on-site device, and streams `scan data` / XML back — using DynamoDB to map a `deviceId` to its active connection. Note the invoke URL and stage; you'll need it in both the app (`websocket_controller.dart`) and the on-site controller (`remote_control.py`).
+3. Stand up a WebSocket API Gateway (per the data-flow diagram in the [root README](../README.md)) with a Lambda integration that relays `commands` from the app to the connected on-site device, and streams `scan data` / XML back — using DynamoDB to map a `deviceId` to its active connection. Note the invoke URL and stage; you'll need it in both the app (`WS_URL` in `env.json`) and the on-site controller (the `CHIRP_WS_URL` environment variable for `remote_control.py`).
 
 ## 3. On-site rooted Android device setup
 
@@ -67,8 +75,9 @@ chirp_control/
    python -m uiautomator2 init
    ```
 
-3. Update the constants at the top of `lambda/remote_control.py`:
-   - `SERVER_URL` — your WebSocket API Gateway invoke URL, with a `?deviceId=<id>` query param matching the sonar you register in the app's Settings screen
+3. Set the WebSocket URL and update the constants at the top of `lambda/remote_control.py`:
+   - `CHIRP_WS_URL` (environment variable, e.g. `export CHIRP_WS_URL=wss://<api-id>.execute-api.<region>.amazonaws.com/<stage>`) — your WebSocket API Gateway invoke URL; the script appends `?deviceId=<id>`
+   - `DEVICE_ID` — must match the sonar you register in the app's Settings screen
    - `APP` — the sonar app's package name, if different from Fish Deeper
 4. Run it on-site:
 

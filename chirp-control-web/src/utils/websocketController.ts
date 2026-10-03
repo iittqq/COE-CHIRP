@@ -1,3 +1,5 @@
+import { WS_URL } from "./config";
+
 export type MessageListener = (data: Record<string, unknown>) => void;
 export type DisconnectListener = () => void;
 
@@ -10,7 +12,7 @@ export class WebSocketService {
 
   constructor(
     deviceId: string,
-    apiUrl = "wss://ywh1uzhhk9.execute-api.us-east-2.amazonaws.com/test",
+    apiUrl = WS_URL,
   ) {
     this.deviceId = deviceId;
     this.apiUrl = apiUrl;

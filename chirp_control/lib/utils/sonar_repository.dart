@@ -1,3 +1,4 @@
+import 'config.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -8,7 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_repository.dart';
 
 // Replace with your API Gateway invoke URL after deploying the Lambda.
-const _baseUrl = 'https://078qjv1849.execute-api.us-east-2.amazonaws.com';
+const _baseUrl = apiBaseUrl;
 
 const _userIdPrefsKey = 'chirp_device_user_id';
 const _migratedPrefsKey = 'chirp_device_user_id_legacy_migrated_v2';

@@ -1,3 +1,4 @@
+import 'config.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
@@ -13,7 +14,7 @@ class WebSocketService {
 
   WebSocketService({
     required this.deviceId,
-    this.apiUrl = "wss://ywh1uzhhk9.execute-api.us-east-2.amazonaws.com/test",
+    this.apiUrl = wsUrl,
   });
 
   final _incomingController =

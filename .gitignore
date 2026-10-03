@@ -83,3 +83,17 @@ FishDeeperCsvLogs/
 data_visualization/*.png
 !data_visualization/assets/*.png
 /*.xml
+
+# Secrets and deployment-specific config (endpoints, keys, credentials).
+# Commit the *.example files instead.
+.env
+.env.*
+!.env.example
+**/env.json
+!**/env.example.json
+*.pem
+*.key
+.aws/
+**/credentials
+**/*.tfvars
+chirp_control/lambda/*.zip

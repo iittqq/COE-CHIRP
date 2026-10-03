@@ -1,7 +1,5 @@
 import { getSession } from "./auth";
-
-// Replace with your API Gateway invoke URL after deploying the Lambda.
-const BASE_URL = "https://078qjv1849.execute-api.us-east-2.amazonaws.com";
+import { API_BASE_URL as BASE_URL } from "./config";
 
 // Pre-auth, every browser install got a random anonymous id cached under
 // this key and sonars were registered under it. Now that real accounts

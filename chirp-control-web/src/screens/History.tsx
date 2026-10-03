@@ -13,6 +13,7 @@ import {
   Typography,
 } from "@mui/material";
 import UploadFileRoundedIcon from "@mui/icons-material/UploadFileRounded";
+import FolderOpenRoundedIcon from "@mui/icons-material/FolderOpenRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import SensorsRoundedIcon from "@mui/icons-material/SensorsRounded";
 import AccessTimeRoundedIcon from "@mui/icons-material/AccessTimeRounded";
@@ -21,7 +22,7 @@ import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
 import { deleteScan, findScanByFolderName, loadScans, renameScan, type ScanData } from "../utils/scanRepo";
-import { deriveFolderName, importScanZip } from "../utils/importScan";
+import { deriveFolderName, FOLDER_INPUT_PROPS, importScanFiles } from "../utils/importScan";
 import { useSnackbar } from "../notifications";
 
 interface HistoryProps {
@@ -41,9 +42,10 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [pendingImport, setPendingImport] = useState<{ file: File; existing: ScanData } | null>(null);
+  const [pendingImport, setPendingImport] = useState<{ files: File[]; existing: ScanData } | null>(null);
 
   const importInputRef = useRef<HTMLInputElement>(null);
+  const importFolderInputRef = useRef<HTMLInputElement>(null);
 
   const reload = async () => {
     setLoading(true);
@@ -127,9 +129,9 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
     }
   };
 
-  const finishImport = async (file: File, overwriteId?: string) => {
+  const finishImport = async (files: File[], overwriteId?: string) => {
     try {
-      await importScanZip(file, { overwriteId });
+      await importScanFiles(files, { overwriteId });
       await reload();
       notify("Scan imported successfully", { severity: "success" });
     } catch (err) {
@@ -138,23 +140,23 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
   };
 
   const handleImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files ?? []);
     e.target.value = "";
-    if (!file) return;
+    if (files.length === 0) return;
 
-    const existing = await findScanByFolderName(deriveFolderName(file.name));
+    const existing = await findScanByFolderName(deriveFolderName(files));
     if (existing) {
-      setPendingImport({ file, existing });
+      setPendingImport({ files, existing });
       return;
     }
-    await finishImport(file);
+    await finishImport(files);
   };
 
   const confirmOverwriteImport = async () => {
     if (!pendingImport) return;
-    const { file, existing } = pendingImport;
+    const { files, existing } = pendingImport;
     setPendingImport(null);
-    await finishImport(file, existing.id);
+    await finishImport(files, existing.id);
   };
 
   const q = searchText.trim().toLowerCase();
@@ -181,8 +183,11 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
           pb: 0.5,
         }}
       >
-        <IconButton onClick={() => importInputRef.current?.click()}>
+        <IconButton title="Import .zip" onClick={() => importInputRef.current?.click()}>
           <UploadFileRoundedIcon sx={{ color: "primary.main" }} />
+        </IconButton>
+        <IconButton title="Import folder" onClick={() => importFolderInputRef.current?.click()}>
+          <FolderOpenRoundedIcon sx={{ color: "primary.main" }} />
         </IconButton>
         <Typography sx={{ flex: 1, textAlign: "center", fontWeight: 700, fontSize: 18 }}>
           {selecting ? `${picked.size} Selected` : "SONAR DATA"}
@@ -192,6 +197,7 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
         </Button>
       </Box>
       <input ref={importInputRef} type="file" accept=".zip" hidden onChange={handleImportFile} />
+      <input ref={importFolderInputRef} type="file" {...FOLDER_INPUT_PROPS} hidden onChange={handleImportFile} />
 
       <Box sx={{ bgcolor: "#FFFFFF", px: 2, pb: 1.25 }}>
         <Box sx={{ maxWidth: 1200, mx: "auto" }}>
@@ -242,7 +248,14 @@ export default function History({ onOpenScan, onCompareScans }: HistoryProps) {
               startIcon={<UploadFileRoundedIcon />}
               onClick={() => importInputRef.current?.click()}
             >
-              Import Scan
+              Import Scan (.zip)
+            </Button>
+            <Button
+              variant="outlined"
+              startIcon={<FolderOpenRoundedIcon />}
+              onClick={() => importFolderInputRef.current?.click()}
+            >
+              Import Scan Folder
             </Button>
           </Box>
         ) : (
