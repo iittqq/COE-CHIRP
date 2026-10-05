@@ -58,30 +58,73 @@ Because the CHIRP sonar sold by Deeper, which was used in this system, stops sca
 
 ## A Few Performed Tests
 
-Begin sand at 5 cm, water at 69 cm without chirp and 70 cm with. Pour 200g of silt then begin scans. Chirp is at 70 cm after silt.
+### Sand Only
+
+---
+
+**Setup:** Fill the settling column with 5 cm of sand and 65 cm of water. Rest the CHIRP sonar at the water's surface (~ 70 cm).
+
+**Procedure:**
+
+1. Scan for 2 - 5 minutes, then end the session and remove the CHIRP.
+2. Add another 5 cm of sand.
+3. Remove 5 cm of water to offset the added sand, keeping the surface at ~ 70 cm.
+4. Replace the CHIRP and scan again.
+5. Repeat steps 1 - 4 until the desired number of tests is complete.
+
+**Expected result:** The sonar data should show the sediment height increasing with each iteration, representing a rising mudline during dredging.
+
+---
+
+### Sand and Silt
+
+---
+
+**Setup:** Fill the settling column with 5 cm of sand and 65 cm of water. Rest the CHIRP sonar at the water's surface (~ 70 cm). Measure 200g of silt.
+
+**Procedure:**
+
+1. Pour 200g of silt into the settling column then begin scan.
+2. Allow ~ 5 minutes minimum for test containing silt as the first ~ 2 minutes are heavily affected by the suspended sediment.
+3. Settling column water level increases by ~ 2 cm after silt.
+4. End the scan session and remove water until the original 70 cm water level is achieved.
+5. Measure 200g of silt
+6. Repeat steps 1 - 5 until the desired number of tests is complete.
+
+**Outcome:**
 
 - 5 cm sand and 200g silt = ~ 7cm final
 - 5 cm sand and 400g silt = ~ 9 cm final
 - 5 cm sand and 600g silt = ~10.6 cm final
 - 5 cm sand and 800g silt = ~12.4 cm final
 
+Observation: The silt is present in the bathymetry results retrieved from the CHIRP sonar scans indicating the sonar's ability to detect a mudline comprising of multiple different sediment types.
+
 ---
 
-Begin sand at 1 cm, water at 70 cm with chirp. Pour 200g silt then begin scans. CHIRP at 70 during scans with silt
+**Setup:** Fill the settling column with 2 cm of sand and 68 cm of water. Rest the CHIRP sonar at the water's surface (~ 70 cm). Measure 200g of silt.
+
+**Procedure:**
+
+1. Pour 200g of silt into the settling column then begin scan.
+2. Allow ~ 5 minutes minimum for tests containing silt as the first ~ 2 minutes are heavily affected by the suspended sediment.
+3. Settling column water level increases by ~ 2 cm after silt.
+4. End the scan session and remove water until the original 70 cm water level is achieved.
+5. Measure 200g of silt
+6. Repeat steps 1 - 5 until the desired number of tests is complete.
+
+**Outcome:**
 
 - 2 cm sand and 200g silt = ~ 4 cm final
 - 2 cm sand and 400g silt = ~ 6 cm final
 - 2 cm sand and 600g silt = ~ 8 cm final
 - 2 cm sand and 800g silt = ~ 10 cm final
 
+Observation: Despite reducing the amount of sand the silt is still present in the bathymetry results retrieved from the CHIRP sonar scans indicating the sonar's ability to detect a mudline comprising of primarily silt.
+
 ---
 
-Begin sand at 2 cm, water at 69 cm with chirp. Pour 200g silt then begin scans. CHIRP at 70 during scans with silt
-
-- 2 cm sand and 200g silt = ~ 4 cm final
-- 2 cm sand and 400g silt = ~ 6 cm final
-- 2 cm sand and 600g silt = ~ 8 cm final
-- 2 cm sand and 800g silt = ~ 10 cm final
+**Expected result:** The sonar data should show the sediment height increasing with each iteration along with the suspended silt impairing the sonars ability to gather accurate data until zone settling begins, representing a rising mudline and influx of slury during dredging.
 
 ---
 
