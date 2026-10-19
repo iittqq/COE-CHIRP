@@ -56,15 +56,26 @@ The sonar hardware itself is a commercial, off-the-shelf transducer with proprie
 
 ![Hardware layout: solar panel, waterproof enclosure, step motor, and CHIRP sonar](chirp_control/assets/system-diagram.png)
 
+#### 3D-printed parts
+
+The STL files for the custom 3D-printed parts needed to mount the sonar are in [`STL files/`](<STL files>):
+
+| File                                                                                               | Description                                                                                              |
+| -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| [`Chirp Guiding Tube.stl`](<STL files/Chirp Guiding Tube.stl>)                                     | Guiding tube for the sonar                                                                               |
+| [`Chirp Guiding Tube Rubber Inner Ring.stl`](<STL files/Chirp Guiding Tube Rubber Inner Ring.stl>) | Guiding tube with room for an adhesive inner rubber ring to provide stability to the settling plate pole |
+| [`Chirp Mount Beads.stl`](<STL files/Chirp Mount Beads.stl>)                                       | CHIRP harness for attaching the sonar to the beads                                                       |
+| [`ChirpRefImg.png`](<STL files/ChirpRefImg.png>)                                                   | Reference cross-section drawing (dimensions in mm) of the sonar housing the parts are sized against      |
+
 ### Software stack
 
-| Layer               | Technology                                     | Purpose                                                                                                                                    |
-| ------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Mobile app          | [Flutter](https://flutter.dev)                 | Cross-platform (iOS/Android) app for triggering scans and viewing bathymetry data — see [`chirp_control/`](chirp_control)                  |
+| Layer               | Technology                                                                 | Purpose                                                                                                                                    |
+| ------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Mobile app          | [Flutter](https://flutter.dev)                                             | Cross-platform (iOS/Android) app for triggering scans and viewing bathymetry data — see [`chirp_control/`](chirp_control)                  |
 | Web app             | [React](https://react.dev) + [TypeScript](https://www.typescriptlang.org/) | Browser-based alternative for triggering scans and analyzing bathymetry/ISP data — see [`chirp-control-web/`](chirp-control-web)           |
-| Real-time transport | WebSockets                                     | Persistent, full-duplex channel between the mobile/web apps and the on-site device                                                          |
-| Cloud               | AWS (Lambda, API Gateway WebSockets, DynamoDB) | Hosts the WebSocket connection, routes commands, and stores device IDs and scan data — see [`chirp_control/lambda/`](chirp_control/lambda) |
-| Data analysis       | Python / Jupyter                               | Post-processing and visualization of bathymetry scan data — see [`data_visualization/`](data_visualization)                                |
+| Real-time transport | WebSockets                                                                 | Persistent, full-duplex channel between the mobile/web apps and the on-site device                                                         |
+| Cloud               | AWS (Lambda, API Gateway WebSockets, DynamoDB)                             | Hosts the WebSocket connection, routes commands, and stores device IDs and scan data — see [`chirp_control/lambda/`](chirp_control/lambda) |
+| Data analysis       | Python / Jupyter                                                           | Post-processing and visualization of bathymetry scan data — see [`data_visualization/`](data_visualization)                                |
 
 ## Repository layout
 
@@ -74,6 +85,7 @@ chirp/
 │   └── lambda/              AWS Lambda functions for remote control and sonar command handling
 ├── chirp-control-web/       React web app to provide an alternative method for scan control and data analysis
 ├── data_visualization/      Jupyter notebooks and scripts for processing bathymetry scan data
+├── STL files/               3D-printable parts (guiding tube, rubber inner ring, mount beads) for the sonar hardware
 └── FishDeeperCsvLogs/       Raw CSV scan logs exported from the sonar's companion app
 ```
 
@@ -88,11 +100,11 @@ endpoint URLs are **not** committed to this repository. After cloning or
 forking you need to create your own (gitignored) config files before anything
 can connect:
 
-| Component | Copy this template | To this (gitignored) file | Values to fill in |
-| --------- | ------------------ | ------------------------- | ----------------- |
-| Web app ([`chirp-control-web/`](chirp-control-web)) | `.env.example` | `.env.local` | `VITE_API_BASE_URL` (HTTP API: `/auth`, `/sonars`, `/scans`) and `VITE_WS_URL` (scan-control WebSocket, including the stage) |
-| Mobile app ([`chirp_control/`](chirp_control)) | `env.example.json` | `env.json` | `API_BASE_URL` and `WS_URL`, same meaning as above |
-| On-site device script ([`chirp_control/lambda/remote_control.py`](chirp_control/lambda/remote_control.py)) | — | `CHIRP_WS_URL` environment variable | The same WebSocket URL (the script appends `?deviceId=...`) |
+| Component                                                                                                  | Copy this template | To this (gitignored) file           | Values to fill in                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------- | ------------------ | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Web app ([`chirp-control-web/`](chirp-control-web))                                                        | `.env.example`     | `.env.local`                        | `VITE_API_BASE_URL` (HTTP API: `/auth`, `/sonars`, `/scans`) and `VITE_WS_URL` (scan-control WebSocket, including the stage) |
+| Mobile app ([`chirp_control/`](chirp_control))                                                             | `env.example.json` | `env.json`                          | `API_BASE_URL` and `WS_URL`, same meaning as above                                                                           |
+| On-site device script ([`chirp_control/lambda/remote_control.py`](chirp_control/lambda/remote_control.py)) | —                  | `CHIRP_WS_URL` environment variable | The same WebSocket URL (the script appends `?deviceId=...`)                                                                  |
 
 ```bash
 # Web app
