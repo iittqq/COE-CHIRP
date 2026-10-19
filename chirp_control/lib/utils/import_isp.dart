@@ -6,20 +6,20 @@ import 'isp_repo.dart';
 import 'xlsx_reader.dart';
 
 Future<void> importIspFile() async {
-  final result = await FilePicker.pickFiles(
+  final result = await FilePicker.pickFile(
     type: FileType.custom,
     allowedExtensions: ['xlsx', 'xls'],
   );
 
-  if (result == null || result.files.isEmpty) return;
+  if (result == null) return;
 
-  final sourcePath = result.files.single.path;
+  final sourcePath = result.path;
   if (sourcePath == null) return;
 
   final sourceFile = File(sourcePath);
   if (!await sourceFile.exists()) return;
 
-  final originalName = result.files.single.name;
+  final originalName = result.name;
   final bytes = await sourceFile.readAsBytes();
 
   // Validate it actually parses as a workbook with a header row before

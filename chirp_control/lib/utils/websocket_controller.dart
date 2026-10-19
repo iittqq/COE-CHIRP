@@ -23,6 +23,11 @@ class WebSocketService {
   Stream<Map<String, dynamic>> get messages => _incomingController.stream;
 
   Future<void> connect() async {
+    if (apiUrl.isEmpty) {
+      debugPrint("WS_URL is not set. Run with: "
+          "flutter run --dart-define-from-file=env.json");
+      return;
+    }
     final uri = Uri.parse("$apiUrl?deviceId=$deviceId");
     debugPrint("Connecting to $uri ...");
 

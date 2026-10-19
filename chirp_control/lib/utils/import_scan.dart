@@ -7,14 +7,14 @@ import 'auth_repository.dart';
 import 'scan_repo.dart';
 
 Future<void> importScanZip() async {
-  final result = await FilePicker.pickFiles(
+  final result = await FilePicker.pickFile(
     type: FileType.custom,
     allowedExtensions: ['zip'],
   );
 
-  if (result == null || result.files.isEmpty) return;
+  if (result == null) return;
 
-  final zipPath = result.files.single.path;
+  final zipPath = result.path;
   if (zipPath == null) return;
 
   final zipFile = File(zipPath);

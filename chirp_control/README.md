@@ -4,6 +4,12 @@ Flutter mobile app for the [CHIRP](../README.md) sonar system — triggers scans
 
 See the [root README](../README.md) for the full system architecture and background. This document covers how to set up and run the pieces that live in this directory.
 
+## Screenshots
+
+| Home | Scans | Sonar Data | Scan Analysis |
+| :---: | :---: | :---: | :---: |
+| <img src="assets/home.jpg" alt="Home screen with sonar connection status, weather chart, and Start New Scan button" width="200"> | <img src="assets/scan.jpg" alt="Scans screen with sonar selection, scan duration presets, and Begin Scan button" width="200"> | <img src="assets/scans.jpg" alt="Sonar Data screen listing saved scans with search" width="200"> | <img src="assets/individual-scan.jpg" alt="Scan Analysis screen with depth stats and bathymetry chart" width="200"> |
+
 ## Project layout
 
 ```

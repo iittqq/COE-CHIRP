@@ -16,6 +16,13 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+// Some plugins still compile against Java 8; silence the "obsolete option" warnings.
+subprojects {
+    tasks.withType<JavaCompile>().configureEach {
+        options.compilerArgs.add("-Xlint:-options")
+    }
+}
+
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }
