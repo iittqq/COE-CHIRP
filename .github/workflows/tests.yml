@@ -47,11 +47,18 @@ jobs:
         working-directory: chirp_control
     steps:
       - uses: actions/checkout@v4
+      # Pinned to the Flutter release the app is developed and tested with, so a
+      # new stable release can't change results. Newer releases deprecate
+      # package:flutter/material.dart in favour of package:material_ui; bump this
+      # together with that migration.
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.7
       - run: flutter pub get
-      - run: flutter analyze lib test
+      # Info-level hints (e.g. deprecations) are reported but don't fail the
+      # build; warnings and errors still do.
+      - run: flutter analyze --no-fatal-infos lib test
       - run: flutter test
 
   notebook:

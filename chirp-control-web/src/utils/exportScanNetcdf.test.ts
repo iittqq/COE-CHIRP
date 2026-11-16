@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { parseCsv } from "./scanRepo";
+import { parseCsv } from "./csv";
 import { processBathymetry } from "./bathymetry";
 import { encodeNetcdf } from "./netcdf";
 import { buildScanNetcdf, encodeScanNetcdf, FILL_ECHO, parseEchoProfiles } from "./exportScanNetcdf";
@@ -35,9 +35,12 @@ describe("NetCDF export", () => {
     const bytes = goldenBytes();
     // Regenerate after an intentional format change with:
     //   UPDATE_GOLDEN=1 pnpm test
-    if (process.env.UPDATE_GOLDEN === "1" || !existsSync(GOLDEN)) {
+    if (process.env.UPDATE_GOLDEN === "1") {
       mkdirSync(new URL("netcdf/", FIXTURES), { recursive: true });
       writeFileSync(GOLDEN, bytes);
+    }
+    if (!existsSync(GOLDEN)) {
+      throw new Error("test-fixtures/netcdf/header.nc is missing; run UPDATE_GOLDEN=1 pnpm test and commit it");
     }
     expect(Buffer.from(bytes).equals(readFileSync(GOLDEN))).toBe(true);
   });

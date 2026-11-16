@@ -48,7 +48,7 @@ elevation and datum, blind-spot offset). Both are included in the PDF report.
 
 ## Prerequisites
 
-- [Flutter SDK](https://docs.flutter.dev/get-started/install) (this project targets `sdk: ^3.8.1`) — run `flutter doctor` after installing
+- [Flutter SDK](https://docs.flutter.dev/get-started/install) (this project targets `sdk: ^3.8.1`; developed and tested with **Flutter 3.47.7**, the version CI uses). Run `flutter doctor` after installing. Newer Flutter releases deprecate `package:flutter/material.dart`; `flutter analyze` then reports info-level hints in every file, but the app still builds.
 - Xcode (for iOS) and/or Android Studio + SDK (for Android), whichever platform you're building for
 - An AWS account if you're standing up your own backend (DynamoDB, API Gateway, Lambda)
 - A CHIRP sonar - this project used Fish Deeper's CHIRP Max

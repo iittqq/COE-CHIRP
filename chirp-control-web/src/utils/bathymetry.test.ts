@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { parseCsv } from "./scanRepo";
+import { parseCsv } from "./csv";
 import {
   BathymetryFormatError,
   depthChange,

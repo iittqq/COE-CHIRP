@@ -5,7 +5,7 @@
 // chirp_control/lib/utils/depth_processing.dart, and both are covered by unit
 // tests against the same fixtures.
 
-import type { CsvRow } from "./scanRepo";
+import type { CsvRow } from "./csv";
 
 // ---------------------------------------------------------------------------
 // Schema

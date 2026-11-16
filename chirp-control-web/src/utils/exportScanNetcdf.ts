@@ -18,7 +18,7 @@ import {
   type ProcessedScan,
 } from "./bathymetry";
 import { encodeNetcdf, type NcAttrValue, type NcFile, type NcVariable } from "./netcdf";
-import type { CsvRow } from "./scanRepo";
+import type { CsvRow } from "./csv";
 
 export const NETCDF_FORMAT = "chirp-bathymetry-netcdf/1.0";
 export const FILL_DOUBLE = -9999.0;

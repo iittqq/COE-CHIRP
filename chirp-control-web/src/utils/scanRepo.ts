@@ -3,6 +3,7 @@ import { getSession } from "./auth";
 import { API_BASE_URL as BASE_URL } from "./config";
 import { normalizeAcquisition, type AcquisitionMetadata } from "./acquisition";
 import { parseBathymetryRows } from "./bathymetry";
+import { parseCsv, type CsvCell, type CsvRow } from "./csv";
 
 // Scans live in the backend (see lambda/scan_handler.py): metadata in
 // DynamoDB, raw CSVs in S3. The raw CSV text is kept (not pre-parsed) so
@@ -15,24 +16,7 @@ import { parseBathymetryRows } from "./bathymetry";
 // to migrate.
 const legacyScansStore = createStore("chirp-control-scans", "scans");
 
-export type CsvCell = string | number;
-export type CsvRow = CsvCell[];
-
-// Lines starting with "#" are comments (used by the annotated CSV export for
-// its metadata block) and are skipped.
-export function parseCsv(text: string): CsvRow[] {
-  return text
-    .split(/\r?\n/)
-    .filter((line) => line.trim().length > 0 && !line.trimStart().startsWith("#"))
-    .map((line) =>
-      line.split(",").map((cell) => {
-        const trimmed = cell.trim();
-        if (trimmed === "") return trimmed;
-        const num = Number(trimmed);
-        return Number.isNaN(num) ? trimmed : num;
-      }),
-    );
-}
+export { parseCsv, type CsvCell, type CsvRow } from "./csv";
 
 interface StoredScan {
   id: string;
