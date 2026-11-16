@@ -5,14 +5,17 @@ import ShareOutlinedIcon from "@mui/icons-material/ShareOutlined";
 import PictureAsPdfOutlinedIcon from "@mui/icons-material/PictureAsPdfOutlined";
 import DepthLineChart from "../components/DepthLineChart";
 import type { ScanData } from "../utils/scanRepo";
-import { depthUnitLabel, loadIsMetric } from "../utils/unitsRepository";
+import { cmToDisplayUnit, depthUnitLabel, loadIsMetric } from "../utils/unitsRepository";
+import { computeDepthSpots, mergeGappedSeriesForComparison, timeLabel } from "../utils/depthChart";
 import {
-  calcDepthStats,
-  calcSettledDepth,
-  computeDepthSpots,
-  mergeGappedSeriesForComparison,
-  timeLabel,
-} from "../utils/depthChart";
+  depthChange,
+  depthStatistics,
+  describeDepthChange,
+  processingSummary,
+  settledDepth,
+  SETTLED_WINDOW_S,
+  tryProcessBathymetry,
+} from "../utils/bathymetry";
 import { useSnackbar } from "../notifications";
 import {
   addCenteredCaption,
@@ -52,14 +55,41 @@ export default function CompareScans({ scans, onBack, onToggleNav }: CompareScan
   }, []);
 
   const unit = depthUnitLabel(isMetric);
-  const perScanPoints = scans.map((scan) => computeDepthSpots(scan.bathymetryRows, isMetric));
+  const toDisplay = (cm: number) => cmToDisplayUnit(cm, isMetric);
+  const results = scans.map((scan) =>
+    tryProcessBathymetry(scan.bathymetryRows, {
+      blindSpotOffsetCm: scan.acquisition.blindSpotOffsetCm,
+    }),
+  );
+  const processed = results.map((r) => r.scan);
+  const perScanPoints = processed.map((p) => (p ? computeDepthSpots(p, isMetric) : []));
   const hasData = perScanPoints.some((points) => points.length > 0);
   const merged = mergeGappedSeriesForComparison(perScanPoints);
 
-  const perScanStats = scans.map((scan) => calcDepthStats(scan.bathymetryRows, isMetric));
-  const settledDepths = scans.map((scan) => calcSettledDepth(scan.bathymetryRows, isMetric));
-  const validSettled = settledDepths.filter((v): v is number => v !== null);
-  const change = validSettled.length >= 2 ? Math.max(...validSettled) - Math.min(...validSettled) : null;
+  const perScanStats = processed.map((p) => {
+    const st = p ? depthStatistics(p) : null;
+    return st ? { avg: toDisplay(st.avgCm), min: toDisplay(st.minCm), max: toDisplay(st.maxCm) } : null;
+  });
+  const settledDepths = processed.map((p) => {
+    const st = p ? settledDepth(p) : null;
+    return st ? toDisplay(st.depthCm) : null;
+  });
+  // Signed: settled depth of the chronologically latest scan minus the
+  // earliest (by first timestamp). Negative = mudline rose toward the sonar.
+  const changeResult = depthChange(processed.filter((p) => p !== null));
+  const validScans = scans.filter((_, i) => processed[i] !== null);
+  const change = changeResult ? toDisplay(changeResult.changeCm) : null;
+  const changeFrom = changeResult ? validScans[changeResult.earliestIndex].title : null;
+  const changeTo = changeResult ? validScans[changeResult.latestIndex].title : null;
+  const formatChange = (value: number) =>
+    `${value > 0 ? "+" : ""}${value.toFixed(2)} ${unit} (${describeDepthChange(changeResult?.changeCm ?? 0)})`;
+  const changeCaption =
+    changeFrom && changeTo
+      ? `Settled depth of ${changeTo} (latest) minus ${changeFrom} (earliest). Settled = mean of the last ${SETTLED_WINDOW_S} s. Negative = mudline rose.`
+      : "Needs at least two scans with bathymetry data.";
+  const formatErrors = results
+    .map((r, i) => (r.error ? `${scans[i].title}: ${r.error}` : null))
+    .filter((e): e is string => e !== null);
 
   const handleShare = async () => {
     const lines = scans.map((scan, i) => {
@@ -68,7 +98,7 @@ export default function CompareScans({ scans, onBack, onToggleNav }: CompareScan
     });
     const summary = [
       "Scan Comparison",
-      change !== null ? `Depth Change: ${change.toFixed(2)} ${unit}` : null,
+      change !== null ? `Depth Change: ${formatChange(change)}` : null,
       ...lines,
     ]
       .filter(Boolean)
@@ -107,12 +137,8 @@ export default function CompareScans({ scans, onBack, onToggleNav }: CompareScan
       y = addHeading(doc, "Scan Comparison", y, 18);
       y = addSubtext(doc, `Generated ${new Date().toLocaleString()}`, y);
 
-      y = addLabelValueLine(
-        doc,
-        "Depth Change",
-        change !== null ? `${change.toFixed(2)} ${unit}` : "—",
-        y,
-      );
+      y = addLabelValueLine(doc, "Depth Change", change !== null ? formatChange(change) : "—", y);
+      y = addWrappedText(doc, changeCaption, y);
       y += 10;
 
       y = addHeading(doc, "Scans", y, 13);
@@ -126,10 +152,23 @@ export default function CompareScans({ scans, onBack, onToggleNav }: CompareScan
             ? `avg ${scanStats.avg.toFixed(1)}  min ${scanStats.min.toFixed(1)}  max ${scanStats.max.toFixed(1)}  settled ${
                 settled !== null ? settled.toFixed(1) : "—"
               } (${unit})`
-            : "No bathymetry stats available",
+            : (results[i].error ?? "No bathymetry stats available"),
           y,
         );
+        const p = processed[i];
+        if (p) {
+          const offset = scan.acquisition.blindSpotOffsetCm ?? 0;
+          y = addWrappedText(
+            doc,
+            `${scan.time}. ${processingSummary(p.counts)}. ${
+              offset === 0 ? "No blind-spot correction." : `Blind-spot offset ${offset} cm applied.`
+            }`,
+            y,
+            9,
+          );
+        }
       });
+      y = addWrappedText(doc, `Software: chirp-control-web ${__APP_VERSION__}`, y, 9);
       y += 10;
 
       y = addHeading(doc, "Bathymetry Data", y, 13);
@@ -238,8 +277,16 @@ export default function CompareScans({ scans, onBack, onToggleNav }: CompareScan
               Depth Change
             </Typography>
             <Typography sx={{ fontSize: 24, fontWeight: 800, mt: 1 }}>
-              {change !== null ? `${change.toFixed(2)} ${unit}` : "—"}
+              {change !== null ? formatChange(change) : "—"}
             </Typography>
+            <Typography sx={{ fontSize: 11, color: "text.secondary", fontWeight: 600, mt: 0.5 }}>
+              {changeCaption}
+            </Typography>
+            {formatErrors.map((msg) => (
+              <Typography key={msg} sx={{ fontSize: 11, color: "error.main", fontWeight: 600, mt: 0.5 }}>
+                {msg}
+              </Typography>
+            ))}
             <Box sx={{ mt: 1.5 }}>
               <Box
                 sx={{

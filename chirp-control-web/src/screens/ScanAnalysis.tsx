@@ -1,12 +1,25 @@
 import { useEffect, useRef, useState } from "react";
-import { Box, Button, IconButton, TextField, Typography } from "@mui/material";
+import { Box, Button, IconButton, Menu, MenuItem, TextField, Typography } from "@mui/material";
 import ChevronLeftRoundedIcon from "@mui/icons-material/ChevronLeftRounded";
 import ShareOutlinedIcon from "@mui/icons-material/ShareOutlined";
 import PictureAsPdfOutlinedIcon from "@mui/icons-material/PictureAsPdfOutlined";
+import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
 import DepthLineChart from "../components/DepthLineChart";
-import { saveNotes, type ScanData } from "../utils/scanRepo";
-import { depthUnitLabel, loadIsMetric } from "../utils/unitsRepository";
-import { buildGappedSeries, calcDepthStats, computeDepthSpots, timeLabel } from "../utils/depthChart";
+import AcquisitionCard from "../components/AcquisitionCard";
+import { saveAcquisition, saveNotes, type ScanData } from "../utils/scanRepo";
+import { cmToDisplayUnit, depthUnitLabel, loadIsMetric } from "../utils/unitsRepository";
+import { buildGappedSeries, computeDepthSpots, timeLabel } from "../utils/depthChart";
+import {
+  depthStatistics,
+  mudlineElevationM,
+  processingSummary,
+  settledDepth,
+  SETTLED_WINDOW_S,
+  tryProcessBathymetry,
+} from "../utils/bathymetry";
+import { ACQUISITION_FIELDS, formatAcquisitionValue, type AcquisitionMetadata } from "../utils/acquisition";
+import { buildAnnotatedCsv, downloadText, safeFileName } from "../utils/exportScanCsv";
+import { downloadBytes, encodeScanNetcdf } from "../utils/exportScanNetcdf";
 import { useSnackbar } from "../notifications";
 import {
   addCenteredCaption,
@@ -24,6 +37,7 @@ import {
 import menuIcon from "../assets/menu.svg";
 
 const SEQUENTIAL_BLUE = "#2a78d6";
+const cardSx = { bgcolor: "#FFFFFF", borderRadius: "14px", border: "1px solid #E5E7EB", p: 1.75 };
 
 interface ScanAnalysisProps {
   scan: ScanData;
@@ -37,6 +51,8 @@ export default function ScanAnalysis({ scan, onBack, onToggleNav }: ScanAnalysis
   const [notes, setNotes] = useState(scan.notes);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [acquisition, setAcquisition] = useState<AcquisitionMetadata>(scan.acquisition);
+  const [exportMenuAnchor, setExportMenuAnchor] = useState<HTMLElement | null>(null);
   const yAxisPanelRef = useRef<HTMLDivElement>(null);
   const chartBodyRef = useRef<HTMLDivElement>(null);
   const overviewYAxisPanelRef = useRef<HTMLDivElement>(null);
@@ -47,9 +63,85 @@ export default function ScanAnalysis({ scan, onBack, onToggleNav }: ScanAnalysis
   }, []);
 
   const unit = depthUnitLabel(isMetric);
-  const stats = calcDepthStats(scan.bathymetryRows, isMetric);
-  const spots = computeDepthSpots(scan.bathymetryRows, isMetric);
+  const { scan: processed, error: formatError } = tryProcessBathymetry(scan.bathymetryRows, {
+    blindSpotOffsetCm: acquisition.blindSpotOffsetCm,
+  });
+  const statsCm = processed ? depthStatistics(processed) : null;
+  const settledCm = processed ? settledDepth(processed) : null;
+  const toDisplay = (cm: number) => cmToDisplayUnit(cm, isMetric);
+  const stats = statsCm
+    ? {
+        avg: toDisplay(statsCm.avgCm),
+        min: toDisplay(statsCm.minCm),
+        max: toDisplay(statsCm.maxCm),
+        sd: statsCm.stdCm === null ? null : toDisplay(statsCm.stdCm),
+        n: statsCm.n,
+      }
+    : null;
+  const settled = settledCm ? toDisplay(settledCm.depthCm) : null;
+  const mudlineElevation = mudlineElevationM(acquisition.transducerElevationM, settledCm?.depthCm);
+  const spots = processed ? computeDepthSpots(processed, isMetric) : [];
   const series = buildGappedSeries(spots);
+  const offsetCm = acquisition.blindSpotOffsetCm ?? 0;
+  const correctionText =
+    offsetCm === 0
+      ? "No blind-spot correction applied (depths as reported by the sonar)"
+      : `Blind-spot offset of ${offsetCm > 0 ? "+" : ""}${offsetCm} cm added to every depth`;
+  const processingLines = processed
+    ? [
+        processingSummary(processed.counts),
+        correctionText,
+        `Depth is measured downward from the transducer face. Settled depth = mean of the last ${SETTLED_WINDOW_S} s (n = ${settledCm?.n ?? 0}).`,
+      ]
+    : [];
+
+  const handleSaveAcquisition = async (next: AcquisitionMetadata) => {
+    try {
+      const saved = await saveAcquisition(scan, next);
+      setAcquisition(saved);
+      notify("Acquisition settings saved", { severity: "success" });
+    } catch (err) {
+      notify(`Failed to save settings: ${(err as Error).message}`, { severity: "error" });
+      throw err;
+    }
+  };
+
+  const handleExportCsv = () => {
+    if (!processed) {
+      notify("No bathymetry data to export", { severity: "error" });
+      return;
+    }
+    const csv = buildAnnotatedCsv({
+      title: scan.title,
+      scanId: scan.id,
+      folderName: scan.folderName,
+      scan: processed,
+      acquisition,
+    });
+    downloadText(`${safeFileName(scan.title)}-bathymetry.csv`, csv);
+    notify("CSV exported", { severity: "success" });
+  };
+
+  const handleExportNetcdf = () => {
+    if (!processed || processed.samples.length === 0) {
+      notify("No bathymetry data to export", { severity: "error" });
+      return;
+    }
+    try {
+      const bytes = encodeScanNetcdf({
+        title: scan.title,
+        scanId: scan.id,
+        folderName: scan.folderName,
+        scan: processed,
+        acquisition,
+        sonarRows: scan.sonarRows,
+      });
+      downloadBytes(`${safeFileName(scan.title)}-bathymetry.nc`, bytes, "application/x-netcdf");
+      notify("NetCDF exported", { severity: "success" });
+    } catch (err) {
+      notify(`NetCDF export failed: ${(err as Error).message}`, { severity: "error" });
+    }
+  };
 
   const handleShare = async () => {
     const summary = `${scan.title} — ${scan.time} (${scan.duration})`;
@@ -105,10 +197,37 @@ export default function ScanAnalysis({ scan, onBack, onToggleNav }: ScanAnalysis
       y = addHeading(doc, "Depth Data", y, 13);
       if (stats) {
         y = addLabelValueLine(doc, `Avg (${unit})`, stats.avg.toFixed(1), y);
+        y = addLabelValueLine(doc, `SD (${unit})`, stats.sd !== null ? stats.sd.toFixed(2) : "—", y);
         y = addLabelValueLine(doc, `Min (${unit})`, stats.min.toFixed(1), y);
         y = addLabelValueLine(doc, `Max (${unit})`, stats.max.toFixed(1), y);
+        y = addLabelValueLine(
+          doc,
+          `Settled, last ${SETTLED_WINDOW_S} s (${unit})`,
+          settled !== null ? settled.toFixed(1) : "—",
+          y,
+        );
+        y = addLabelValueLine(doc, "Samples (n)", String(stats.n), y);
+        if (mudlineElevation !== null) {
+          y = addLabelValueLine(
+            doc,
+            "Mudline elevation (m)",
+            `${mudlineElevation.toFixed(3)} ${acquisition.datum ?? ""}`.trim(),
+            y,
+          );
+        }
       } else {
-        y = addWrappedText(doc, "No bathymetry stats available", y);
+        y = addWrappedText(doc, formatError ?? "No bathymetry stats available", y);
+      }
+      y += 10;
+
+      y = addHeading(doc, "Processing", y, 13);
+      for (const line of processingLines) y = addWrappedText(doc, line, y);
+      y = addWrappedText(doc, `Software: chirp-control-web ${__APP_VERSION__}`, y);
+      y += 10;
+
+      y = addHeading(doc, "Acquisition Settings", y, 13);
+      for (const spec of ACQUISITION_FIELDS) {
+        y = addLabelValueLine(doc, spec.label, formatAcquisitionValue(acquisition, spec), y);
       }
       y += 10;
 
@@ -175,6 +294,35 @@ export default function ScanAnalysis({ scan, onBack, onToggleNav }: ScanAnalysis
         <Typography sx={{ flex: 1, textAlign: "center", fontWeight: 700 }}>
           Scan Analysis
         </Typography>
+        <IconButton
+          onClick={(e) => setExportMenuAnchor(e.currentTarget)}
+          disabled={!processed}
+          aria-label="Export data"
+        >
+          <FileDownloadOutlinedIcon />
+        </IconButton>
+        <Menu
+          anchorEl={exportMenuAnchor}
+          open={exportMenuAnchor !== null}
+          onClose={() => setExportMenuAnchor(null)}
+        >
+          <MenuItem
+            onClick={() => {
+              setExportMenuAnchor(null);
+              handleExportCsv();
+            }}
+          >
+            Annotated CSV (.csv)
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
+              setExportMenuAnchor(null);
+              handleExportNetcdf();
+            }}
+          >
+            NetCDF, CF-1.8 (.nc)
+          </MenuItem>
+        </Menu>
         <IconButton onClick={handleExportPdf} disabled={exporting} aria-label="Export to PDF">
           <PictureAsPdfOutlinedIcon />
         </IconButton>
@@ -263,14 +411,47 @@ export default function ScanAnalysis({ scan, onBack, onToggleNav }: ScanAnalysis
               ))}
             </Box>
           ) : (
-            <Box
-              sx={{ bgcolor: "#FFFFFF", borderRadius: "14px", border: "1px solid #E5E7EB", p: 1.75 }}
-            >
-              <Typography sx={{ fontSize: 12, color: "text.secondary", fontWeight: 600 }}>
-                No bathymetry stats available
+            <Box sx={cardSx}>
+              <Typography
+                sx={{ fontSize: 12, color: formatError ? "error.main" : "text.secondary", fontWeight: 600 }}
+              >
+                {formatError ?? "No bathymetry stats available"}
               </Typography>
             </Box>
           )}
+
+          {stats && (
+            <Box sx={{ ...cardSx, display: "flex" }}>
+              {[
+                [stats.sd !== null ? stats.sd.toFixed(2) : "—", `SD (${unit})`],
+                [settled !== null ? settled.toFixed(1) : "—", `Settled (${unit})`],
+                [String(stats.n), "Samples"],
+                ...(mudlineElevation !== null
+                  ? [[mudlineElevation.toFixed(3), `Mudline elev. (m${acquisition.datum ? `, ${acquisition.datum}` : ""})`]]
+                  : []),
+              ].map(([value, label]) => (
+                <Box key={label} sx={{ flex: 1, textAlign: "center" }}>
+                  <Typography sx={{ fontSize: 20, fontWeight: 800 }}>{value}</Typography>
+                  <Typography sx={{ fontSize: 12, color: "text.secondary", fontWeight: 600, mt: 0.5 }}>
+                    {label}
+                  </Typography>
+                </Box>
+              ))}
+            </Box>
+          )}
+
+          {processed && (
+            <Box sx={cardSx}>
+              <Typography sx={{ fontSize: 13, fontWeight: 800, mb: 0.75 }}>Processing</Typography>
+              {processingLines.map((line) => (
+                <Typography key={line} sx={{ fontSize: 12, color: "text.secondary", fontWeight: 600, mb: 0.5 }}>
+                  {line}
+                </Typography>
+              ))}
+            </Box>
+          )}
+
+          <AcquisitionCard acquisition={acquisition} onSave={handleSaveAcquisition} />
 
           <Box
             sx={{ bgcolor: "#FFFFFF", borderRadius: "14px", border: "1px solid #E5E7EB", p: 1.75 }}

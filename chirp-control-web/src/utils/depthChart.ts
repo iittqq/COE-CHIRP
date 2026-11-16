@@ -1,80 +1,22 @@
 import { cmToDisplayUnit } from "./unitsRepository";
-import type { CsvRow } from "./scanRepo";
+import { depthCm, type ProcessedScan } from "./bathymetry";
 
 export interface DepthPoint {
   x: number; // seconds since scan start
   y: number; // negated depth (so "down" reads as down on a normal y-up axis)
 }
 
-function toNumber(value: CsvRow[number] | undefined): number | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  // Number("") and Number("   ") are both 0 - treat a blank cell as missing
-  // rather than a real 0 reading (otherwise empty leading depth rows plot as
-  // a flat line at 0 and pad the chart).
-  if (value.trim() === "") return null;
-  const parsed = Number(value);
-  return Number.isNaN(parsed) ? null : parsed;
-}
-
-// Some scans log a handful of samples before the device's clock is synced
-// (or after it drifts on reconnect), leaving one or two points stranded
-// seconds-to-minutes away from the main run. Anchoring the time axis to those
-// strays leaves the chart mostly empty with the real data crammed into one
-// end. Drop leading/trailing islands that are both a small minority of points
-// and separated from the body by a gap that's a large fraction of the whole
-// span, so the axis can start where the real data does.
-function trimOutlyingTimeIslands(sorted: DepthPoint[]): DepthPoint[] {
-  if (sorted.length < 10) return sorted;
-
-  const totalSpan = sorted[sorted.length - 1].x - sorted[0].x;
-  if (totalSpan <= 0) return sorted;
-
-  const deltas: number[] = [];
-  for (let i = 1; i < sorted.length; i++) deltas.push(sorted[i].x - sorted[i - 1].x);
-  const sortedDeltas = [...deltas].sort((a, b) => a - b);
-  const median = sortedDeltas[Math.floor(sortedDeltas.length / 2)] || 0;
-
-  // A gap only counts as an "island boundary" if it's both far bigger than the
-  // normal sample spacing and a meaningful slice of the total scan length.
-  const gapThreshold = Math.max(median * 20, totalSpan * 0.15);
-  const maxIslandFraction = 0.15;
-
-  let start = 0;
-  let end = sorted.length; // exclusive
-
-  for (let i = 1; i < sorted.length; i++) {
-    if (i / sorted.length > maxIslandFraction) break;
-    if (deltas[i - 1] >= gapThreshold) start = i;
-  }
-  for (let i = sorted.length - 1; i >= 1; i--) {
-    if ((sorted.length - i) / sorted.length > maxIslandFraction) break;
-    if (deltas[i - 1] >= gapThreshold) end = i;
-  }
-
-  const result = sorted.slice(start, end);
-  return result.length >= 2 ? result : sorted;
-}
-
-export function computeDepthSpots(rows: CsvRow[], isMetric: boolean): DepthPoint[] {
-  const validRows = rows.filter((row) => row.length >= 5);
-  const points: DepthPoint[] = [];
-
-  for (const row of validRows) {
-    const depthMeters = toNumber(row[2]);
-    const timestampMs = toNumber(row[4]);
-    if (depthMeters === null || timestampMs === null) continue;
-
-    const depthDisplay = cmToDisplayUnit(depthMeters * 100, isMetric);
-    points.push({ x: timestampMs, y: depthDisplay });
-  }
-
-  if (points.length === 0) return [];
-
-  points.sort((a, b) => a.x - b.x);
-  const trimmed = trimOutlyingTimeIslands(points);
-  const firstTime = trimmed[0].x;
-  return trimmed.map((p) => ({ x: (p.x - firstTime) / 1000, y: -p.y }));
+// Chart points for one processed scan: x = seconds since the first used
+// sample, y = negated depth in display units. Parsing, sorting, trimming and
+// the blind-spot offset all happen in bathymetry.ts (processBathymetry), so the
+// chart and the statistics are always computed from the same samples.
+export function computeDepthSpots(scan: ProcessedScan, isMetric: boolean): DepthPoint[] {
+  if (scan.startMs === null) return [];
+  const start = scan.startMs;
+  return scan.samples.map((s) => ({
+    x: (s.timeMs - start) / 1000,
+    y: -cmToDisplayUnit(depthCm(scan, s), isMetric),
+  }));
 }
 
 // Elapsed-time gap (seconds) beyond which consecutive samples are considered a
@@ -255,43 +197,4 @@ export function buildMinorTicks(
     ticks.push(k * minorStep);
   }
   return ticks;
-}
-
-export interface DepthStats {
-  avg: number;
-  min: number;
-  max: number;
-}
-
-export function calcDepthStats(rows: CsvRow[], isMetric: boolean): DepthStats | null {
-  const values: number[] = [];
-  for (const row of rows) {
-    if (row.length < 5) continue;
-    const depthMeters = toNumber(row[2]);
-    if (depthMeters === null) continue;
-    values.push(cmToDisplayUnit(depthMeters * 100, isMetric));
-  }
-  if (values.length === 0) return null;
-
-  const sum = values.reduce((a, b) => a + b, 0);
-  return {
-    avg: sum / values.length,
-    min: Math.min(...values),
-    max: Math.max(...values),
-  };
-}
-
-export function calcSettledDepth(rows: CsvRow[], isMetric: boolean): number | null {
-  const values: number[] = [];
-  for (const row of rows) {
-    if (row.length < 5) continue;
-    const depthMeters = toNumber(row[2]);
-    if (depthMeters === null) continue;
-    values.push(cmToDisplayUnit(depthMeters * 100, isMetric));
-  }
-  if (values.length === 0) return null;
-
-  const lastCount = Math.min(values.length, 20);
-  const lastValues = values.slice(values.length - lastCount);
-  return lastValues.reduce((a, b) => a + b, 0) / lastValues.length;
 }

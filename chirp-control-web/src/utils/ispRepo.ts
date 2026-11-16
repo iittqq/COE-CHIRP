@@ -118,3 +118,34 @@ export async function saveIspNotes(record: IspRecord, notes: string): Promise<vo
 export async function deleteIspRecord(record: IspRecord): Promise<void> {
   await del(record.id, ispStore);
 }
+
+// ISP records live only in this browser's IndexedDB (they are not sent to the
+// backend), so they are lost if site data is cleared and other users cannot
+// see them. This export is the way to keep or share them: one JSON file with
+// every record's original sheet (headers + rows), title, location and notes.
+// See docs/data-dictionary.md, "ISP export".
+export const ISP_EXPORT_FORMAT = "chirp-isp-export/1.0";
+
+export function buildIspExport(records: IspRecord[], exportedAt = new Date()): string {
+  return JSON.stringify(
+    {
+      format: ISP_EXPORT_FORMAT,
+      software: `chirp-control-web ${__APP_VERSION__}`,
+      exportedUtc: exportedAt.toISOString(),
+      note: "Instrumented Settlement Plate records as imported from their source spreadsheets; values are unmodified.",
+      records: records.map((r) => ({
+        id: r.id,
+        title: r.title,
+        location: r.location,
+        notes: r.notes,
+        sourceFileName: r.fileName,
+        sheetName: r.sheetName,
+        importedUtc: new Date(r.uploadedAt).toISOString(),
+        headers: r.headers,
+        rows: r.rows,
+      })),
+    },
+    null,
+    2,
+  );
+}

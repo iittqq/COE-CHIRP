@@ -15,17 +15,36 @@ See the [root README](../README.md) for the full system architecture and backgro
 ```
 chirp_control/
 ├── lib/
-│   ├── screens/       home, scan, chart, compare_scan, data, settings, sonar_sensors
-│   ├── components/    nav_bar, scan_duration_input, system_status_card, weather_graph
-│   └── utils/         websocket_controller (app <-> AWS WebSocket), sonar_repository
-│                       (REST CRUD for registered sonars), scan_repo, import_scan
+│   ├── screens/       auth, home, scan, data (scan list), chart (scan analysis),
+│   │                   compare_scan, isp_data, isp_analysis, settings, sonar_sensors
+│   ├── components/    nav_bar, scan_duration_input, system_status_card,
+│   │                   weather_graph, acquisition_card
+│   └── utils/         depth_processing (all depth parsing/cleaning/statistics,
+│                       see "Data processing" in the root README), acquisition,
+│                       scan_repo, import_scan, isp_repo, import_isp, xlsx_reader,
+│                       websocket_controller (app <-> AWS WebSocket),
+│                       sonar_repository, auth_repository, units_repository,
+│                       alert_prefs, config
+├── test/              depth_processing_test (shared fixtures in ../test-fixtures)
 ├── assets/            app assets + the images used in the root README
-└── lambda/
-    ├── sonar_handler.py     AWS Lambda behind a REST API Gateway — backs the
-    │                         "add/remove sonar" flows in Settings
-    └── remote_control.py    NOT deployed to AWS despite the folder name — this
-                              runs on-site (see below)
+└── lambda/            AWS Lambda functions (auth, sonar, scan, WebSocket
+                        connect/disconnect/send-message) and remote_control.py,
+                        which is NOT a Lambda: it runs on-site (see below)
 ```
+
+### Where the mobile app keeps data
+
+Scans and ISP records imported or recorded in the mobile app are stored **on
+the device only** (`<app documents>/scans/` and `<app documents>/isp/`). They
+are not uploaded to the backend and do not appear in the web app. The mobile
+app uses the backend for account login (`/auth`), the sonar registry
+(`/sonars`) and scan control (WebSocket). The file layout is described in the
+[data dictionary](../docs/data-dictionary.md#3-scan-records).
+
+The scan analysis screen shows how its numbers were computed (rows used,
+skipped and trimmed; blind-spot correction) and lets you record the scan's
+**acquisition settings** (sonar model, firmware, beam mode, transducer
+elevation and datum, blind-spot offset). Both are included in the PDF report.
 
 ## Prerequisites
 
@@ -51,7 +70,7 @@ chirp_control/
    ```
 
    Then fill in `env.json`:
-   - `API_BASE_URL` — the REST API Gateway invoke URL used for `/auth`, `/sonars` and `/scans`
+   - `API_BASE_URL` — the HTTP API Gateway invoke URL used for `/auth` and `/sonars` (the web app also uses `/scans` on the same API)
    - `WS_URL` — the WebSocket API Gateway invoke URL, including its stage (e.g. `.../test`)
 
    These are read in `lib/utils/config.dart`.
@@ -65,9 +84,24 @@ chirp_control/
 
 ## 2. AWS backend setup
 
-1. Create a DynamoDB table named `RegisteredChirpSonars` with partition key `user_id` (string) and sort key `sonar_id` (string) — `lambda/sonar_handler.py` reads and writes this table.
-2. Deploy `lambda/sonar_handler.py` as a Lambda function (Python runtime; it only needs `boto3`, which ships with the runtime) and put it behind an API Gateway with `GET /sonars`, `POST /sonars`, and `DELETE /sonars` routes. CORS headers are already returned by the handler.
-3. Stand up a WebSocket API Gateway (per the data-flow diagram in the [root README](../README.md)) with a Lambda integration that relays `commands` from the app to the connected on-site device, and streams `scan data` / XML back — using DynamoDB to map a `deviceId` to its active connection. Note the invoke URL and stage; you'll need it in both the app (`WS_URL` in `env.json`) and the on-site controller (the `CHIRP_WS_URL` environment variable for `remote_control.py`).
+The mobile app, the web app and the on-site device share one backend. Every
+function, route, DynamoDB table, key and IAM permission is documented in
+[`lambda/README.md`](lambda/README.md). In short:
+
+- **HTTP API** (API Gateway): `POST /auth` → `auth_handler.py`,
+  `GET|POST|DELETE /sonars` → `sonar_handler.py`,
+  `GET|POST|PUT|DELETE /scans` → `scan_handler.py` (used by the web app).
+- **WebSocket API** (API Gateway, stage `test`): `$connect` →
+  `connect_handler.py`, `$disconnect` → `disconnect_handler.py`, `$default` →
+  `send_message_handler.py`. It relays commands from the app to the on-site
+  device identified by `?deviceId=<id>`, and streams XML and scan state back.
+- **DynamoDB tables**: `ChirpUserAccounts`, `RegisteredChirpSonars`,
+  `ChirpScans`, `ChirpWebSocketConnections` (+ GSI `connectionId-index`).
+- **S3 bucket** for the web app's scan CSVs (`SCANS_BUCKET`).
+
+Note the WebSocket invoke URL and stage. You need it both in the app (`WS_URL`
+in `env.json`) and on the on-site controller (the `CHIRP_WS_URL` environment
+variable for `remote_control.py`).
 
 ## 3. On-site rooted Android device setup
 
@@ -93,7 +127,20 @@ chirp_control/
 
    It holds a persistent WebSocket connection with automatic reconnect/backoff, and needs `su` access to issue `input tap` / `input swipe` / Wi-Fi toggles and to read back the phone's UI hierarchy after each command.
 
-## Data export & visualization
+## Tests
 
-Scan data exported from the app (or the sonar's companion app) is processed and visualized separately — see [`data_visualization/`](../data_visualization) in the repo root.
+```
+flutter test
+```
+
+runs [`test/depth_processing_test.dart`](test/depth_processing_test.dart),
+which checks parsing, schema validation, cleaning, statistics, settled depth
+and the signed depth change against the fixtures shared with the web app and
+the notebook ([`../test-fixtures/bathymetry/`](../test-fixtures/bathymetry)).
+
+## Data processing, export and visualization
+
+How depths are read, cleaned and summarised is documented in the root README,
+section [Data processing](../README.md#data-processing). Settling-column scans
+are analysed separately in [`data_visualization/`](../data_visualization).
 

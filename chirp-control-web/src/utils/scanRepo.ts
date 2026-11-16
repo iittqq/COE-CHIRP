@@ -1,6 +1,8 @@
 import { createStore, get, del, keys } from "idb-keyval";
 import { getSession } from "./auth";
 import { API_BASE_URL as BASE_URL } from "./config";
+import { normalizeAcquisition, type AcquisitionMetadata } from "./acquisition";
+import { parseBathymetryRows } from "./bathymetry";
 
 // Scans live in the backend (see lambda/scan_handler.py): metadata in
 // DynamoDB, raw CSVs in S3. The raw CSV text is kept (not pre-parsed) so
@@ -16,10 +18,12 @@ const legacyScansStore = createStore("chirp-control-scans", "scans");
 export type CsvCell = string | number;
 export type CsvRow = CsvCell[];
 
+// Lines starting with "#" are comments (used by the annotated CSV export for
+// its metadata block) and are skipped.
 export function parseCsv(text: string): CsvRow[] {
   return text
     .split(/\r?\n/)
-    .filter((line) => line.trim().length > 0)
+    .filter((line) => line.trim().length > 0 && !line.trimStart().startsWith("#"))
     .map((line) =>
       line.split(",").map((cell) => {
         const trimmed = cell.trim();
@@ -38,6 +42,7 @@ interface StoredScan {
   title: string;
   location: string;
   notes: string;
+  acquisition?: AcquisitionMetadata;
   userId?: string;
 }
 
@@ -47,6 +52,7 @@ interface ApiScan {
   title: string;
   location: string;
   notes: string;
+  acquisition?: unknown;
   sonarCsvUrl: string;
   bathymetryCsvUrl: string;
 }
@@ -59,8 +65,12 @@ export interface ScanData {
   title: string;
   location: string;
   time: string;
+  // Unix ms of the first bathymetry sample (null if unknown). Used to order
+  // scans chronologically, e.g. for the signed depth change.
+  startMs: number | null;
   duration: string;
   notes: string;
+  acquisition: AcquisitionMetadata;
   userId?: string;
 }
 
@@ -71,61 +81,31 @@ function asNumber(value: CsvCell | undefined): number | null {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
-function extractFirstTimestamp(
+// First/last bathymetry timestamps, read through the same schema-aware parser
+// as the analysis screens (so header rows and column order are handled in one
+// place). Falls back to sonar.csv (column 0 = Unix ms) when bathymetry is
+// missing or doesn't match the schema; the analysis screens report that error.
+function extractTimeRange(
   sonarRows: CsvRow[],
   bathymetryRows: CsvRow[],
-): number | null {
-  if (bathymetryRows.length > 0) {
-    for (const row of bathymetryRows) {
-      if (row.length > 4) {
-        const ts = asNumber(row[4]);
-        if (ts !== null) return Math.round(ts);
-      }
-    }
+): { first: number; last: number } | null {
+  try {
+    const times = parseBathymetryRows(bathymetryRows).samples.map((s) => s.timeMs);
+    if (times.length > 0) return { first: Math.min(...times), last: Math.max(...times) };
+  } catch {
+    // fall through to sonar.csv
   }
 
-  if (sonarRows.length > 0) {
-    for (const row of sonarRows) {
-      if (row.length > 0) {
-        const ts = asNumber(row[0]);
-        if (ts !== null && ts > 1_000_000_000_000) return Math.round(ts);
-      }
-    }
+  let first: number | null = null;
+  let last: number | null = null;
+  for (const row of sonarRows) {
+    if (row.length === 0) continue;
+    const ts = asNumber(row[0]);
+    if (ts === null || ts < 1_000_000_000_000) continue;
+    first = first === null ? ts : Math.min(first, ts);
+    last = last === null ? ts : Math.max(last, ts);
   }
-
-  return null;
-}
-
-function extractDurationSeconds(
-  sonarRows: CsvRow[],
-  bathymetryRows: CsvRow[],
-): number {
-  let firstTs: number | null = null;
-  let lastTs: number | null = null;
-
-  if (bathymetryRows.length > 0) {
-    for (const row of bathymetryRows) {
-      if (row.length > 4) {
-        const ts = asNumber(row[4]);
-        if (ts === null) continue;
-        firstTs ??= ts;
-        lastTs = ts;
-      }
-    }
-  } else if (sonarRows.length > 0) {
-    for (const row of sonarRows) {
-      if (row.length === 0) continue;
-      const ts = asNumber(row[0]);
-      if (ts === null || ts < 1_000_000_000_000) continue;
-      firstTs ??= ts;
-      lastTs = ts;
-    }
-  }
-
-  if (firstTs === null || lastTs === null) return 0;
-
-  const seconds = Math.round((lastTs - firstTs) / 1000);
-  return seconds < 0 ? 0 : seconds;
+  return first !== null && last !== null ? { first, last } : null;
 }
 
 function formatDurationFromSeconds(totalSeconds: number): string {
@@ -155,8 +135,9 @@ function toScanData(stored: StoredScan): ScanData {
     ? parseCsv(stored.bathymetryCsv)
     : [];
 
-  const firstTimestamp = extractFirstTimestamp(sonarRows, bathymetryRows);
-  const durationSeconds = extractDurationSeconds(sonarRows, bathymetryRows);
+  const range = extractTimeRange(sonarRows, bathymetryRows);
+  const firstTimestamp = range ? Math.round(range.first) : null;
+  const durationSeconds = range ? Math.max(0, Math.round((range.last - range.first) / 1000)) : 0;
 
   return {
     id: stored.id,
@@ -166,8 +147,10 @@ function toScanData(stored: StoredScan): ScanData {
     title: stored.title.trim() || stored.folderName.replaceAll("_", " "),
     location: stored.location.trim() || "SITE A",
     time: firstTimestamp !== null ? formatTime(firstTimestamp) : "Unknown time",
+    startMs: firstTimestamp,
     duration: formatDurationFromSeconds(durationSeconds),
     notes: stored.notes,
+    acquisition: normalizeAcquisition(stored.acquisition),
     userId: stored.userId,
   };
 }
@@ -209,6 +192,7 @@ async function apiToScanData(scan: ApiScan, userId: string): Promise<ScanData> {
     title: scan.title,
     location: scan.location,
     notes: scan.notes,
+    acquisition: normalizeAcquisition(scan.acquisition),
     userId,
   });
 }
@@ -236,7 +220,7 @@ async function postScan(params: {
 
 async function updateScan(
   scanId: string,
-  fields: { title?: string; notes?: string },
+  fields: { title?: string; notes?: string; acquisition?: AcquisitionMetadata },
 ): Promise<void> {
   await request("/scans", {
     method: "PUT",
@@ -314,6 +298,7 @@ export async function addScan(params: {
     title: scan.title,
     location: scan.location,
     notes: scan.notes,
+    acquisition: normalizeAcquisition(scan.acquisition),
     userId,
   });
 }
@@ -329,6 +314,15 @@ export async function renameScan(
 
 export async function saveNotes(scan: ScanData, notes: string): Promise<void> {
   await updateScan(scan.id, { notes });
+}
+
+export async function saveAcquisition(
+  scan: ScanData,
+  acquisition: AcquisitionMetadata,
+): Promise<AcquisitionMetadata> {
+  const normalized = normalizeAcquisition(acquisition);
+  await updateScan(scan.id, { acquisition: normalized });
+  return normalized;
 }
 
 export async function deleteScan(scan: ScanData): Promise<void> {

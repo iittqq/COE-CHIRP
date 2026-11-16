@@ -1,0 +1,55 @@
+# Citation metadata for this repository (Citation File Format 1.2.0).
+# GitHub shows a "Cite this repository" button from this file, and Zenodo
+# uses it to fill in the archived record. Validate after every edit:
+#   pip install cffconvert && cffconvert --validate
+#
+# TODO before the first release (see RELEASING.md):
+#   - add ORCID iDs:            orcid: "https://orcid.org/0000-0000-0000-0000"
+#   - add the other authors (form below), with affiliations and ORCIDs
+#   - add `license: <SPDX id>` once LSU and the sponsor confirm the license
+#   - set `date-released` and, after Zenodo mints it, `doi` (concept DOI)
+#   - update `repository-code` after the transfer to the organization account
+#
+#   - family-names: <Family name>
+#     given-names: <Given names>
+#     affiliation: Louisiana State University
+#     orcid: "https://orcid.org/<ORCID>"
+cff-version: 1.2.0
+message: "If you use this software, please cite it using these metadata."
+title: "COE-CHIRP: A software-based CHIRP sonar system to track mudline elevation during dredging"
+type: software
+version: 1.0.0
+authors:
+  - family-names: Lee
+    given-names: Ikaika
+    affiliation: Louisiana State University
+abstract: >-
+  COE-CHIRP turns a commercial CHIRP sonar into a remotely controlled,
+  cloud-connected instrument for tracking mudline elevation in real time
+  during marsh-creation dredging. It contains a Flutter mobile app and a
+  React web app for triggering scans and analysing bathymetry and
+  Instrumented Settlement Plate (ISP) data, the AWS Lambda backend, the
+  on-site controller that drives the sonar's companion app on a rooted
+  Android phone, a Jupyter notebook for settling-column validation tests,
+  and STL files for the 3D-printed sonar mount.
+repository-code: "https://github.com/iittqq/COE-CHIRP"
+keywords:
+  - CHIRP sonar
+  - mudline
+  - dredging
+  - marsh creation
+  - settlement plate
+  - bathymetry
+  - coastal restoration
+  - Louisiana
+references:
+  - type: thesis
+    title: "Developing a Software-based CHIRP Sonar System to Track Mudline Elevation During Dredging"
+    authors:
+      - family-names: Lee
+        given-names: Ikaika
+    thesis-type: "Master's thesis"
+    department: Department of Computer Science and Engineering
+    institution:
+      name: Louisiana State University
+    year: 2026

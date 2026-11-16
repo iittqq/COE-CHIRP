@@ -6,7 +6,6 @@ import TableChartRoundedIcon from "@mui/icons-material/TableChartRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import type { SvgIconComponent } from "@mui/icons-material";
 import menuIcon from "../assets/menu.svg";
-import cpraLogo from "../assets/CPRA-LOGO.jpg";
 
 export const SIDEBAR_WIDTH = 232;
 
@@ -46,7 +45,24 @@ export default function SideNavBar({ currentIndex, onChange, open, onClose }: Si
       }}
     >
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, px: 3, pb: 3 }}>
-        <Box component="img" src={cpraLogo} alt="CPRA" sx={{ width: 28, height: 28, borderRadius: "50%" }} />
+        {/* Neutral app mark. The CPRA logo was removed pending permission to
+            publish it (see RELEASING.md); restore it here if granted. */}
+        <Box
+          aria-hidden
+          sx={{
+            width: 28,
+            height: 28,
+            borderRadius: "50%",
+            bgcolor: "#2a78d6",
+            color: "#FFFFFF",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+          }}
+        >
+          <RadarRoundedIcon sx={{ fontSize: 18 }} />
+        </Box>
         <Typography sx={{ fontWeight: 800, fontSize: 18, color: "#111827", flex: 1 }}>
           Chirp Control
         </Typography>

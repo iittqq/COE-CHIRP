@@ -5,10 +5,13 @@ export interface WeatherLocation {
   timezone: string;
 }
 
+// Neutral public default (LSU campus, Baton Rouge). Deployment-site
+// coordinates are deliberately not committed; set the site location in the
+// app (Home > weather card), which saves it in this browser only.
 export const defaultWeatherLocation: WeatherLocation = {
-  name: "29.80, -93.33",
-  latitude: 29.7977,
-  longitude: -93.3251,
+  name: "Baton Rouge, LA",
+  latitude: 30.4133,
+  longitude: -91.18,
   timezone: "America/Chicago",
 };
 

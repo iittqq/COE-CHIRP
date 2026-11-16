@@ -1,5 +1,6 @@
 import JSZip from "jszip";
-import { addScan, type ScanData } from "./scanRepo";
+import { addScan, parseCsv, type ScanData } from "./scanRepo";
+import { parseBathymetryRows } from "./bathymetry";
 import { getSession } from "./auth";
 
 const CSV_NAMES = ["sonar.csv", "bathymetry.csv"];
@@ -79,6 +80,11 @@ export async function importScanFiles(
     sonarCsv = sonarFile ? await sonarFile.text() : "";
     bathymetryCsv = bathymetryFile ? await bathymetryFile.text() : "";
   }
+
+  // Validate against the documented schema before uploading, so a changed
+  // vendor export is rejected with a clear message instead of being stored and
+  // plotted from the wrong columns. Throws BathymetryFormatError.
+  if (bathymetryCsv.trim()) parseBathymetryRows(parseCsv(bathymetryCsv));
 
   return addScan({
     folderName: deriveFolderName(files),

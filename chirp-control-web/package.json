@@ -1,13 +1,20 @@
 {
   "name": "chirp-control-web",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "Browser app for controlling the COE-CHIRP sonar system and analysing bathymetry and ISP data.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/iittqq/COE-CHIRP.git",
+    "directory": "chirp-control-web"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -35,6 +42,7 @@
     "babel-plugin-react-compiler": "^1.0.0",
     "oxlint": "^1.75.0",
     "typescript": "~6.0.2",
-    "vite": "^8.2.0"
+    "vite": "^8.2.0",
+    "vitest": "^5.1.0"
   }
 }

@@ -1,0 +1,42 @@
+{
+  "_comment": "Input for build_sample_dataset.py. Replace every value that starts with TODO before building the final package; the builder refuses to build a non-draft package while any TODO remains. See RELEASING.md, 'Sample dataset'.",
+  "version": "1.0.0",
+  "title": "COE-CHIRP settling-column sample data: CHIRP sonar depth readings over known sediment heights",
+  "package_name": "COE-CHIRP-settling-column-sample",
+  "creators": [
+    {
+      "name": "Lee, Ikaika",
+      "affiliation": "Louisiana State University",
+      "orcid": "TODO: ORCID iD (0000-0000-0000-0000), or remove this key"
+    }
+  ],
+  "license": "TODO: SPDX id confirmed with the sponsor, e.g. CC-BY-4.0",
+  "software": {
+    "repository": "https://github.com/iittqq/COE-CHIRP",
+    "version": "1.0.0",
+    "doi": "TODO: concept DOI of the software record on Zenodo (10.5281/zenodo.NNNNNNN)"
+  },
+  "thesis": "Lee, I. (2026). Developing a Software-based CHIRP Sonar System to Track Mudline Elevation During Dredging [Master's thesis, Louisiana State University].",
+  "keywords": ["CHIRP sonar", "bathymetry", "mudline", "settling column", "dredging", "marsh creation", "NetCDF"],
+  "experiment": {
+    "description": "Laboratory settling-column test: sand was added to a transparent settling column in steps and the sonar, centred and held at a constant height at the water surface, recorded depth to the sand surface for 2-4 minutes at each step. Water was removed after each step to keep the surface, and therefore the transducer, at the same height. Procedure: data_visualization/README.md ('Sand Only') in the software repository.",
+    "column": "4 ft (about 1.2 m) transparent settling column with a yard stick taped to the side",
+    "sediment": "TODO: sediment description (e.g. site-specific dredged sand; grain size if known)",
+    "water_height_cm": 69,
+    "water_height_note": "Water height above the column floor at the start of each run, as used in data_processing.ipynb (OBSERVED_WATER_HEIGHT_CM). TODO: confirm.",
+    "sediment_height_note": "Sediment height measured by hand at the end of each run (folder name)."
+  },
+  "acquisition": {
+    "sonarModel": "TODO: exact sonar model (e.g. Deeper CHIRP+ 2)",
+    "scanAngleDeg": 7,
+    "transducerElevationM": 0.69,
+    "datum": "settling column floor (local)",
+    "blindSpotOffsetCm": 0
+  },
+  "scans": [
+    { "folder": "scan_data_7_deg_0_cm", "sediment_height_cm": 0 },
+    { "folder": "scan_data_7_deg_6_cm", "sediment_height_cm": 6 },
+    { "folder": "scan_data_7_deg_12_cm", "sediment_height_cm": 12 },
+    { "folder": "scan_data_7_deg_18_cm", "sediment_height_cm": 18 }
+  ]
+}

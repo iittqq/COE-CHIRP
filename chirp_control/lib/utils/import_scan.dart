@@ -1,9 +1,11 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:archive/archive.dart';
+import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'auth_repository.dart';
+import 'depth_processing.dart';
 import 'scan_repo.dart';
 
 Future<void> importScanZip() async {
@@ -64,6 +66,21 @@ Future<void> importScanZip() async {
   if (!sonarExists && !bathExists) {
     await targetDir.delete(recursive: true);
     throw Exception('Zip did not contain sonar.csv or bathymetry.csv');
+  }
+
+  // Validate against the documented bathymetry schema so a changed vendor
+  // export is rejected with a clear message instead of being plotted from the
+  // wrong columns (see docs/data-dictionary.md).
+  if (bathExists) {
+    try {
+      final text = await File(
+        '${targetDir.path}/bathymetry.csv',
+      ).readAsString();
+      parseBathymetryRows(const CsvDecoder().convert(text));
+    } on BathymetryFormatException {
+      await targetDir.delete(recursive: true);
+      rethrow;
+    }
   }
 
   // Tag with the current account so the scan is attributed to whoever

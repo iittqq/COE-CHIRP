@@ -8,6 +8,10 @@ import 'package:share_plus/share_plus.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import '../components/acquisition_card.dart';
+import '../utils/acquisition.dart';
+import '../utils/depth_processing.dart';
+import '../utils/config.dart';
 import '../utils/scan_repo.dart';
 import '../utils/units_repository.dart';
 
@@ -28,6 +32,7 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
   bool _isMetric = true;
   bool _savingNote = false;
   bool _exportingPdf = false;
+  late Map<String, dynamic> _acquisition = widget.scan.acquisition;
 
   @override
   void initState() {
@@ -102,15 +107,50 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
             pw.Text('Date, Time: ${scan.time}'),
             pw.Text('Duration: ${scan.duration}'),
             pw.SizedBox(height: 12),
-            if (stats != null)
+            if (stats != null) ...[
               pw.Text(
                 'Avg: ${stats['avg']!.toStringAsFixed(1)} ${depthUnitLabel(_isMetric)}   '
+                'SD: ${stats['sd']?.toStringAsFixed(2) ?? '—'}   '
                 'Min: ${stats['min']!.toStringAsFixed(1)} ${depthUnitLabel(_isMetric)}   '
                 'Max: ${stats['max']!.toStringAsFixed(1)} ${depthUnitLabel(_isMetric)}',
                 style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-              )
-            else
-              pw.Text('No bathymetry stats available'),
+              ),
+              pw.Text(
+                'Settled (last $settledWindowS s): '
+                '${stats['settled']?.toStringAsFixed(1) ?? '—'} ${depthUnitLabel(_isMetric)}   '
+                'Samples (n): ${stats['n']!.toInt()}',
+              ),
+              if (stats['mudline'] != null)
+                pw.Text(
+                  'Mudline elevation: ${stats['mudline']!.toStringAsFixed(3)} m '
+                  '${_acquisition['datum'] ?? ''}',
+                ),
+            ] else
+              pw.Text(
+                _process(scan.bathymetryRows).error ??
+                    'No bathymetry stats available',
+              ),
+            pw.SizedBox(height: 12),
+            pw.Text(
+              'Processing',
+              style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold),
+            ),
+            for (final line in _processingLines(scan.bathymetryRows))
+              pw.Text(line, style: const pw.TextStyle(fontSize: 9)),
+            pw.Text(
+              'Software: chirp_control $appVersion',
+              style: const pw.TextStyle(fontSize: 9),
+            ),
+            pw.SizedBox(height: 12),
+            pw.Text(
+              'Acquisition Settings',
+              style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold),
+            ),
+            for (final f in acquisitionFields)
+              pw.Text(
+                '${f.label}: ${formatAcquisitionValue(_acquisition, f)}',
+                style: const pw.TextStyle(fontSize: 9),
+              ),
             pw.SizedBox(height: 16),
             pw.Text(
               'Bathymetry Data',
@@ -147,7 +187,10 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
 
       final bytes = await doc.save();
       final safeTitle = scan.title.trim().isEmpty ? 'scan' : scan.title.trim();
-      await Printing.sharePdf(bytes: bytes, filename: '$safeTitle-analysis.pdf');
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename: '$safeTitle-analysis.pdf',
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -158,11 +201,6 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
     }
   }
 
-  double? _toDouble(dynamic value) {
-    if (value is num) return value.toDouble();
-    return double.tryParse(value.toString());
-  }
-
   String _timeLabel(double secondsValue) {
     final totalSeconds = secondsValue.round().clamp(0, 999999);
     final minutes = totalSeconds ~/ 60;
@@ -170,52 +208,71 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 
+  ({ProcessedScan? scan, String? error}) _process(List<List<dynamic>> rows) =>
+      tryProcessBathymetry(
+        rows,
+        blindSpotOffsetCm: acquisitionNumber(_acquisition, 'blindSpotOffsetCm'),
+      );
+
+  // All statistics come from lib/utils/depth_processing.dart (same rules as
+  // the web app): time-sorted, trimmed samples with the blind-spot offset.
   Map<String, double>? _calcDepthStats(List<List<dynamic>> rows) {
-    final depthValues = <double>[];
+    final scan = _process(rows).scan;
+    if (scan == null) return null;
+    final stats = depthStatistics(scan);
+    if (stats == null) return null;
+    final settled = settledDepth(scan);
+    double d(double cm) => cmToDisplayUnit(cm, _isMetric);
+    return {
+      'avg': d(stats.avgCm),
+      'min': d(stats.minCm),
+      'max': d(stats.maxCm),
+      'sd': ?(stats.stdCm == null ? null : d(stats.stdCm!)),
+      'n': stats.n.toDouble(),
+      'settled': ?(settled == null ? null : d(settled.depthCm)),
+      'settledN': (settled?.n ?? 0).toDouble(),
+      'mudline': ?mudlineElevationM(
+        acquisitionNumber(_acquisition, 'transducerElevationM'),
+        settled?.depthCm,
+      ),
+    };
+  }
 
-    for (final row in rows) {
-      if (row.length < 5) continue;
-
-      final depthMeters = _toDouble(row[2]);
-      if (depthMeters == null) continue;
-
-      depthValues.add(cmToDisplayUnit(depthMeters * 100, _isMetric));
-    }
-
-    if (depthValues.isEmpty) return null;
-
-    final sum = depthValues.reduce((a, b) => a + b);
-    final avg = sum / depthValues.length;
-    final min = depthValues.reduce((a, b) => a < b ? a : b);
-    final max = depthValues.reduce((a, b) => a > b ? a : b);
-
-    return {'avg': avg, 'min': min, 'max': max};
+  List<String> _processingLines(List<List<dynamic>> rows) {
+    final scan = _process(rows).scan;
+    if (scan == null) return const [];
+    final offset = scan.blindSpotOffsetCm;
+    return [
+      processingSummary(scan.counts),
+      offset == 0
+          ? 'No blind-spot correction applied (depths as reported by the sonar)'
+          : 'Blind-spot offset of ${offset > 0 ? '+' : ''}$offset cm added to every depth',
+      'Depth is measured downward from the transducer face. Settled depth = mean of the last $settledWindowS s.',
+    ];
   }
 
   List<FlSpot> _graphSpots(List<List<dynamic>> rows) {
-    final validRows = rows.where((row) => row.length >= 5).toList();
-    if (validRows.isEmpty) return [];
-
-    final points = <FlSpot>[];
-
-    for (final row in validRows) {
-      final depthMeters = _toDouble(row[2]);
-      final timestampMs = _toDouble(row[4]);
-
-      if (depthMeters == null || timestampMs == null) continue;
-
-      final depthDisplay = cmToDisplayUnit(depthMeters * 100, _isMetric);
-      points.add(FlSpot(timestampMs, depthDisplay));
-    }
-
-    if (points.isEmpty) return [];
-
-    points.sort((a, b) => a.x.compareTo(b.x));
-
-    final firstTime = points.first.x;
-    return points
-        .map((point) => FlSpot((point.x - firstTime) / 1000.0, -point.y))
+    final scan = _process(rows).scan;
+    if (scan == null) return [];
+    return depthSeries(scan)
+        .map((p) => FlSpot(p.seconds, -cmToDisplayUnit(p.depthCm, _isMetric)))
         .toList();
+  }
+
+  Future<void> _saveAcquisition(Map<String, dynamic> next) async {
+    try {
+      final saved = await ScanRepository.saveAcquisition(widget.scan, next);
+      if (!mounted) return;
+      setState(() => _acquisition = saved);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Acquisition settings saved')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to save settings: $e')));
+    }
   }
 
   List<List<FlSpot>> _splitSpotsAtGaps(List<FlSpot> spots) {
@@ -477,90 +534,92 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
                           child: RepaintBoundary(
                             key: _chartKey,
                             child: Container(
-                            color: Colors.white,
-                            width: fullWidth,
-                            height: graphHeight,
-                            child: LineChart(
-                              LineChartData(
-                                minX: minX,
-                                maxX: maxX,
-                                minY: minY,
-                                maxY: maxY,
-                                gridData: FlGridData(
-                                  show: true,
-                                  drawVerticalLine: true,
-                                  verticalInterval: bottomStep,
-                                  horizontalInterval: leftStep,
-                                  getDrawingHorizontalLine: (value) {
-                                    return const FlLine(
-                                      color: Color(0xFFD1D5DB),
-                                      strokeWidth: 1,
-                                      dashArray: [6, 4],
-                                    );
-                                  },
-                                  getDrawingVerticalLine: (value) {
-                                    return const FlLine(
-                                      color: Color(0xFFD1D5DB),
-                                      strokeWidth: 1,
-                                      dashArray: [6, 4],
-                                    );
-                                  },
-                                ),
-                                borderData: FlBorderData(
-                                  show: true,
-                                  border: Border.all(
-                                    color: const Color(0xFFD1D5DB),
-                                  ),
-                                ),
-                                lineTouchData: LineTouchData(
-                                  touchTooltipData: LineTouchTooltipData(
-                                    getTooltipItems: (touchedSpots) {
-                                      return touchedSpots.map((spot) {
-                                        return LineTooltipItem(
-                                          '${(-spot.y).toStringAsFixed(2)} ${depthUnitLabel(_isMetric)}',
-                                          const TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.w700,
-                                            fontSize: 12,
-                                          ),
-                                        );
-                                      }).toList();
+                              color: Colors.white,
+                              width: fullWidth,
+                              height: graphHeight,
+                              child: LineChart(
+                                LineChartData(
+                                  minX: minX,
+                                  maxX: maxX,
+                                  minY: minY,
+                                  maxY: maxY,
+                                  gridData: FlGridData(
+                                    show: true,
+                                    drawVerticalLine: true,
+                                    verticalInterval: bottomStep,
+                                    horizontalInterval: leftStep,
+                                    getDrawingHorizontalLine: (value) {
+                                      return const FlLine(
+                                        color: Color(0xFFD1D5DB),
+                                        strokeWidth: 1,
+                                        dashArray: [6, 4],
+                                      );
+                                    },
+                                    getDrawingVerticalLine: (value) {
+                                      return const FlLine(
+                                        color: Color(0xFFD1D5DB),
+                                        strokeWidth: 1,
+                                        dashArray: [6, 4],
+                                      );
                                     },
                                   ),
-                                ),
-                                titlesData: FlTitlesData(
-                                  topTitles: const AxisTitles(
-                                    sideTitles: SideTitles(showTitles: false),
-                                  ),
-                                  rightTitles: const AxisTitles(
-                                    sideTitles: SideTitles(showTitles: false),
-                                  ),
-                                  leftTitles: const AxisTitles(
-                                    sideTitles: SideTitles(showTitles: false),
-                                  ),
-                                  bottomTitles: AxisTitles(
-                                    sideTitles: SideTitles(
-                                      showTitles: true,
-                                      reservedSize: 30,
-                                      interval: bottomStep,
-                                      getTitlesWidget: _xTick,
+                                  borderData: FlBorderData(
+                                    show: true,
+                                    border: Border.all(
+                                      color: const Color(0xFFD1D5DB),
                                     ),
                                   ),
-                                ),
-                                lineBarsData: _splitSpotsAtGaps(spots)
-                                    .map(
-                                      (segment) => LineChartBarData(
-                                        spots: segment,
-                                        isCurved: true,
-                                        barWidth: 2,
-                                        color: lineColor,
-                                        dotData: const FlDotData(show: false),
-                                        belowBarData: BarAreaData(show: false),
+                                  lineTouchData: LineTouchData(
+                                    touchTooltipData: LineTouchTooltipData(
+                                      getTooltipItems: (touchedSpots) {
+                                        return touchedSpots.map((spot) {
+                                          return LineTooltipItem(
+                                            '${(-spot.y).toStringAsFixed(2)} ${depthUnitLabel(_isMetric)}',
+                                            const TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.w700,
+                                              fontSize: 12,
+                                            ),
+                                          );
+                                        }).toList();
+                                      },
+                                    ),
+                                  ),
+                                  titlesData: FlTitlesData(
+                                    topTitles: const AxisTitles(
+                                      sideTitles: SideTitles(showTitles: false),
+                                    ),
+                                    rightTitles: const AxisTitles(
+                                      sideTitles: SideTitles(showTitles: false),
+                                    ),
+                                    leftTitles: const AxisTitles(
+                                      sideTitles: SideTitles(showTitles: false),
+                                    ),
+                                    bottomTitles: AxisTitles(
+                                      sideTitles: SideTitles(
+                                        showTitles: true,
+                                        reservedSize: 30,
+                                        interval: bottomStep,
+                                        getTitlesWidget: _xTick,
                                       ),
-                                    )
-                                    .toList(),
+                                    ),
+                                  ),
+                                  lineBarsData: _splitSpotsAtGaps(spots)
+                                      .map(
+                                        (segment) => LineChartBarData(
+                                          spots: segment,
+                                          isCurved: true,
+                                          barWidth: 2,
+                                          color: lineColor,
+                                          dotData: const FlDotData(show: false),
+                                          belowBarData: BarAreaData(
+                                            show: false,
+                                          ),
+                                        ),
+                                      )
+                                      .toList(),
+                                ),
                               ),
-                            ),
                             ),
                           ),
                         ),
@@ -589,6 +648,7 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
     final stats = _calcDepthStats(rows);
 
     if (stats == null) {
+      final error = _process(rows).error;
       return Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -596,28 +656,35 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: const Color(0xFFE5E7EB)),
         ),
-        child: const Text(
-          "No bathymetry stats available",
+        child: Text(
+          error ?? "No bathymetry stats available",
           style: TextStyle(
             fontSize: 12,
-            color: Color(0xFF6B7280),
+            color: error != null
+                ? const Color(0xFFB91C1C)
+                : const Color(0xFF6B7280),
             fontWeight: FontWeight.w600,
           ),
         ),
       );
     }
 
-    Widget oneStat(String label, double value) {
+    Widget oneStat(
+      String label,
+      double? value, {
+      int digits = 1,
+      bool withUnit = true,
+    }) {
       return Expanded(
         child: Column(
           children: [
             Text(
-              value.toStringAsFixed(1),
+              value == null ? '—' : value.toStringAsFixed(digits),
               style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 4),
             Text(
-              '$label (${depthUnitLabel(_isMetric)})',
+              withUnit ? '$label (${depthUnitLabel(_isMetric)})' : label,
               style: const TextStyle(
                 fontSize: 12,
                 color: Color(0xFF6B7280),
@@ -636,11 +703,30 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
-      child: Row(
+      child: Column(
         children: [
-          oneStat('Avg', stats['avg']!),
-          oneStat('Min', stats['min']!),
-          oneStat('Max', stats['max']!),
+          Row(
+            children: [
+              oneStat('Avg', stats['avg']),
+              oneStat('Min', stats['min']),
+              oneStat('Max', stats['max']),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              oneStat('SD', stats['sd'], digits: 2),
+              oneStat('Settled', stats['settled']),
+              oneStat('Samples', stats['n'], digits: 0, withUnit: false),
+              if (stats['mudline'] != null)
+                oneStat(
+                  'Mudline elev. (m)',
+                  stats['mudline'],
+                  digits: 3,
+                  withUnit: false,
+                ),
+            ],
+          ),
         ],
       ),
     );
@@ -706,6 +792,32 @@ class _ScanAnalysisPageState extends State<ScanAnalysisPage> {
           ),
           const SizedBox(height: 10),
           _depthStatsCard(bathymetryRows),
+          const SizedBox(height: 14),
+          if (_processingLines(bathymetryRows).isNotEmpty) ...[
+            _sectionCard(
+              title: "Processing",
+              subtitle: "How these numbers were computed",
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final line in _processingLines(bathymetryRows))
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text(
+                        line,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF6B7280),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
+          AcquisitionCard(acquisition: _acquisition, onSave: _saveAcquisition),
           const SizedBox(height: 14),
           _sectionCard(
             title: "Bathymetry Data",

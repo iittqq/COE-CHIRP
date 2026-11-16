@@ -2,6 +2,7 @@ import boto3
 import json
 import os
 import uuid
+from decimal import Decimal
 from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 
@@ -33,6 +34,52 @@ CORS_HEADERS = {
 # Lambda response limit.
 
 
+# Acquisition settings stored with each scan (see docs/data-dictionary.md).
+# Keys and types must match chirp-control-web/src/utils/acquisition.ts.
+ACQUISITION_TEXT_FIELDS = (
+    'sonarModel', 'sonarFirmware', 'companionAppVersion', 'frequencyMode', 'datum',
+)
+ACQUISITION_NUMBER_FIELDS = (
+    'scanAngleDeg', 'transducerElevationM', 'mountingHeightM', 'blindSpotOffsetCm',
+)
+MAX_TEXT_LENGTH = 200
+
+
+def _validate_acquisition(raw):
+    """Return a clean acquisition map, or raise ValueError."""
+    if not isinstance(raw, dict):
+        raise ValueError('acquisition must be an object')
+    unknown = set(raw) - set(ACQUISITION_TEXT_FIELDS) - set(ACQUISITION_NUMBER_FIELDS)
+    if unknown:
+        raise ValueError(f'Unknown acquisition field(s): {", ".join(sorted(unknown))}')
+    clean = {}
+    for key in ACQUISITION_TEXT_FIELDS:
+        value = raw.get(key)
+        if value is None or value == '':
+            continue
+        if not isinstance(value, str) or len(value) > MAX_TEXT_LENGTH:
+            raise ValueError(f'{key} must be a string of at most {MAX_TEXT_LENGTH} characters')
+        clean[key] = value.strip()
+    for key in ACQUISITION_NUMBER_FIELDS:
+        value = raw.get(key)
+        if value is None or value == '':
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, Decimal)):
+            raise ValueError(f'{key} must be a number')
+        value = Decimal(value)
+        if not value.is_finite():
+            raise ValueError(f'{key} must be finite')
+        clean[key] = value
+    return clean
+
+
+def _json_default(value):
+    # DynamoDB returns numbers as Decimal.
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    raise TypeError(f'Not JSON serializable: {type(value).__name__}')
+
+
 def _get_method(event):
     if 'httpMethod' in event:
         return event['httpMethod']
@@ -40,7 +87,11 @@ def _get_method(event):
 
 
 def _response(status, body):
-    return {'statusCode': status, 'headers': CORS_HEADERS, 'body': json.dumps(body)}
+    return {
+        'statusCode': status,
+        'headers': CORS_HEADERS,
+        'body': json.dumps(body, default=_json_default),
+    }
 
 
 def _csv_key(user_id, scan_id, kind):
@@ -72,6 +123,7 @@ def _to_api(item):
         'title': item.get('title', ''),
         'location': item.get('location', ''),
         'notes': item.get('notes', ''),
+        'acquisition': item.get('acquisition', {}),
         'sonarCsvUrl': _presign(user_id, scan_id, 'sonar'),
         'bathymetryCsvUrl': _presign(user_id, scan_id, 'bathymetry'),
     }
@@ -119,14 +171,23 @@ def handler(event, context):
             return _response(200, {'scan': _to_api(item)})
 
         if method == 'PUT':
-            # Partial metadata update: only title and notes are editable.
-            body = json.loads(event.get('body') or '{}')
+            # Partial metadata update: title, notes and acquisition settings.
+            # parse_float=Decimal because DynamoDB rejects Python floats.
+            body = json.loads(event.get('body') or '{}', parse_float=Decimal)
             names, values, sets = {}, {}, []
             for field in ('title', 'notes'):
                 if field in body:
                     names[f'#{field}'] = field
                     values[f':{field}'] = body[field]
                     sets.append(f'#{field} = :{field}')
+            if 'acquisition' in body:
+                try:
+                    acquisition = _validate_acquisition(body['acquisition'])
+                except ValueError as e:
+                    return _response(400, {'error': str(e)})
+                names['#acquisition'] = 'acquisition'
+                values[':acquisition'] = acquisition
+                sets.append('#acquisition = :acquisition')
             if not sets:
                 return _response(400, {'error': 'Nothing to update'})
             table.update_item(

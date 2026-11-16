@@ -1,0 +1,9 @@
+# Python packages for data_processing.ipynb, chirp_bathymetry.py,
+# chirp_netcdf.py and build_sample_dataset.py.
+# Tested with Python 3.13 (see .python-version). Install with:
+#   pip install -r requirements.txt
+matplotlib==3.10.7
+numpy==2.3.3
+netCDF4>=1.7,<1.8
+jupyterlab>=4.2,<5
+pytest>=8,<10

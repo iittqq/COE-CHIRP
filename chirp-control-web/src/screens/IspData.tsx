@@ -19,7 +19,9 @@ import ChevronRightRoundedIcon from "@mui/icons-material/ChevronRightRounded";
 import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
+import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
 import {
+  buildIspExport,
   deleteIspRecord,
   findIspRecordByFileName,
   formatIspUploadedTime,
@@ -29,6 +31,7 @@ import {
 } from "../utils/ispRepo";
 import { deriveFileName, importIspFile } from "../utils/importIsp";
 import { useSnackbar } from "../notifications";
+import { downloadText } from "../utils/exportScanCsv";
 
 interface IspDataProps {
   onOpenRecord: (record: IspRecord) => void;
@@ -169,6 +172,23 @@ export default function IspData({ onOpenRecord }: IspDataProps) {
       )
     : allRecords;
 
+  // Export the selected records (or all of them) as one JSON file. ISP data
+  // is stored only in this browser, so this is the backup/sharing path.
+  const handleExport = () => {
+    const records = selecting && picked.size > 0
+      ? allRecords.filter((r) => picked.has(r.id))
+      : allRecords;
+    if (records.length === 0) {
+      notify("No ISP records to export", { severity: "info" });
+      return;
+    }
+    const date = new Date().toISOString().slice(0, 10);
+    downloadText(`chirp-isp-records-${date}.json`, buildIspExport(records), "application/json");
+    notify(`Exported ${records.length} ISP record${records.length === 1 ? "" : "s"}`, {
+      severity: "success",
+    });
+  };
+
   return (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <Box
@@ -184,6 +204,9 @@ export default function IspData({ onOpenRecord }: IspDataProps) {
       >
         <IconButton onClick={() => importInputRef.current?.click()}>
           <UploadFileRoundedIcon sx={{ color: "primary.main" }} />
+        </IconButton>
+        <IconButton onClick={handleExport} aria-label="Export ISP records as JSON">
+          <FileDownloadOutlinedIcon sx={{ color: "primary.main" }} />
         </IconButton>
         <Typography sx={{ flex: 1, textAlign: "center", fontWeight: 700, fontSize: 18 }}>
           {selecting ? `${picked.size} Selected` : "ISP DATA"}

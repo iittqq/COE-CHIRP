@@ -79,10 +79,22 @@ captures/
 *.dylib
 
 
+# Raw vendor exports (may contain site coordinates). Public sample data is
+# deposited separately on Zenodo; see docs/data-dictionary.md.
 FishDeeperCsvLogs/
 data_visualization/*.png
 !data_visualization/assets/*.png
+
+# UI hierarchy dumps from the on-site phone / vendor app
 /*.xml
+chirp_control/*.xml
+
+# Jupyter and build artifacts
+.ipynb_checkpoints/
+**/android/build/
+**/android/app/build/
+__pycache__/
+.venv/
 
 # Secrets and deployment-specific config (endpoints, keys, credentials).
 # Commit the *.example files instead.
@@ -97,3 +109,4 @@ data_visualization/*.png
 **/credentials
 **/*.tfvars
 chirp_control/lambda/*.zip
+.pytest_cache/

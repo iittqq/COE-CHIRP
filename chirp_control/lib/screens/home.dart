@@ -28,10 +28,13 @@ class WeatherLocation {
   });
 }
 
+// Neutral public default (LSU campus, Baton Rouge). Deployment-site
+// coordinates are deliberately not committed; set the site location in the
+// app, which saves it on this device only.
 const defaultWeatherLocation = WeatherLocation(
-  name: '29.80, -93.33',
-  latitude: 29.7977,
-  longitude: -93.3251,
+  name: 'Baton Rouge, LA',
+  latitude: 30.4133,
+  longitude: -91.18,
   timezone: 'America/Chicago',
 );
 

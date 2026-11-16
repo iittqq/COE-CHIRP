@@ -3,6 +3,9 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
 import 'package:csv/csv.dart';
+import 'dart:math' as math;
+import 'acquisition.dart';
+import 'depth_processing.dart';
 
 class ScanData {
   final String folderName;
@@ -14,6 +17,11 @@ class ScanData {
   final String time;
   final String duration;
   final String notes;
+  // Unix ms of the first bathymetry sample, used to order scans in time.
+  final double? startMs;
+  // Acquisition settings (sonar model, transducer elevation, datum,
+  // blind-spot offset, ...). See lib/utils/acquisition.dart.
+  final Map<String, dynamic> acquisition;
   // Account user_id that created/imported this scan. Local-only metadata -
   // there's no backend sync for scans yet. Nullable/absent for scans saved
   // before this field existed, so older scan folders without it still load.
@@ -29,6 +37,8 @@ class ScanData {
     required this.time,
     required this.duration,
     required this.notes,
+    this.startMs,
+    this.acquisition = const {},
     this.userId,
   });
 }
@@ -45,68 +55,36 @@ class ScanRepository {
     return '${minutes}m ${seconds.toString().padLeft(2, '0')}s';
   }
 
-  static DateTime? _extractFirstTimestamp(
+  // First/last bathymetry timestamps via the same schema-aware parser the
+  // analysis screens use (header rows, column order). Falls back to
+  // sonar.csv column 0 when bathymetry is missing or malformed; the analysis
+  // screen reports the format error.
+  static ({double first, double last})? _extractTimeRange(
     List<List<dynamic>> sonarRows,
     List<List<dynamic>> bathymetryRows,
   ) {
-    if (bathymetryRows.isNotEmpty) {
-      for (final row in bathymetryRows) {
-        if (row.length > 4) {
-          final ts = _asDouble(row[4]);
-          if (ts != null) {
-            return DateTime.fromMillisecondsSinceEpoch(ts.round());
-          }
-        }
+    try {
+      final times = parseBathymetryRows(
+        bathymetryRows,
+      ).samples.map((s) => s.timeMs).toList();
+      if (times.isNotEmpty) {
+        return (first: times.reduce(math.min), last: times.reduce(math.max));
       }
+    } on BathymetryFormatException {
+      // fall through to sonar.csv
     }
 
-    if (sonarRows.isNotEmpty) {
-      for (final row in sonarRows) {
-        if (row.isNotEmpty) {
-          final ts = _asDouble(row[0]);
-          if (ts != null && ts > 1000000000000) {
-            return DateTime.fromMillisecondsSinceEpoch(ts.round());
-          }
-        }
-      }
+    double? first;
+    double? last;
+    for (final row in sonarRows) {
+      if (row.isEmpty) continue;
+      final ts = _asDouble(row[0]);
+      if (ts == null || ts < 1000000000000) continue;
+      first = first == null ? ts : math.min(first, ts);
+      last = last == null ? ts : math.max(last, ts);
     }
-
-    return null;
-  }
-
-  static int _extractDurationSeconds(
-    List<List<dynamic>> sonarRows,
-    List<List<dynamic>> bathymetryRows,
-  ) {
-    double? firstTs;
-    double? lastTs;
-
-    if (bathymetryRows.isNotEmpty) {
-      for (final row in bathymetryRows) {
-        if (row.length > 4) {
-          final ts = _asDouble(row[4]);
-          if (ts == null) continue;
-
-          firstTs ??= ts;
-          lastTs = ts;
-        }
-      }
-    } else if (sonarRows.isNotEmpty) {
-      for (final row in sonarRows) {
-        if (row.isEmpty) continue;
-
-        final ts = _asDouble(row[0]);
-        if (ts == null || ts < 1000000000000) continue;
-
-        firstTs ??= ts;
-        lastTs = ts;
-      }
-    }
-
-    if (firstTs == null || lastTs == null) return 0;
-
-    final seconds = ((lastTs - firstTs) / 1000).round();
-    return seconds < 0 ? 0 : seconds;
+    if (first == null || last == null) return null;
+    return (first: first, last: last);
   }
 
   static Future<Map<String, dynamic>> _readMetadata(Directory folder) async {
@@ -189,11 +167,13 @@ class ScanRepository {
 
       final metadata = await _readMetadata(folder);
 
-      final firstTimestamp = _extractFirstTimestamp(sonarRows, bathymetryRows);
-      final durationSeconds = _extractDurationSeconds(
-        sonarRows,
-        bathymetryRows,
-      );
+      final range = _extractTimeRange(sonarRows, bathymetryRows);
+      final firstTimestamp = range == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(range.first.round());
+      final durationSeconds = range == null
+          ? 0
+          : math.max(0, ((range.last - range.first) / 1000).round());
 
       final formattedTime = firstTimestamp != null
           ? DateFormat('M/d/yyyy, h:mm a').format(firstTimestamp)
@@ -219,6 +199,8 @@ class ScanRepository {
           time: formattedTime,
           duration: formattedDuration,
           notes: savedNotes,
+          startMs: range?.first,
+          acquisition: normalizeAcquisition(metadata['acquisition']),
           userId: (savedUserId != null && savedUserId.isNotEmpty)
               ? savedUserId
               : null,
@@ -239,6 +221,15 @@ class ScanRepository {
 
   static Future<void> saveNotes(ScanData scan, String notes) async {
     await _writeMetadata(scan.folder, {'notes': notes});
+  }
+
+  static Future<Map<String, dynamic>> saveAcquisition(
+    ScanData scan,
+    Map<String, dynamic> acquisition,
+  ) async {
+    final normalized = normalizeAcquisition(acquisition);
+    await _writeMetadata(scan.folder, {'acquisition': normalized});
+    return normalized;
   }
 
   // Tags a scan folder with the account that created/imported it. Called

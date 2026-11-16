@@ -64,6 +64,16 @@ each reconnect and deleted on disconnect.
 Scan CSVs live in an S3 bucket (private, with a CORS rule allowing `GET`);
 `scanHandler` returns presigned URLs.
 
+`ChirpScans` items hold `folder_name`, `title`, `location`, `notes` and an
+`acquisition` map (sonar model, firmware, beam mode, scan angle, transducer
+elevation and datum, mounting height, blind-spot offset). `PUT /scans`
+validates `acquisition` against a fixed set of keys and types and rejects
+unknown fields with HTTP 400. The attribute names and meanings are in
+[`docs/data-dictionary.md`](../../docs/data-dictionary.md#4-acquisition-metadata).
+No schema change is needed (DynamoDB is schemaless), but deployments older
+than release 1.0.0 must redeploy `scan_handler.py` before the web app can
+save acquisition settings.
+
 ## IAM (least privilege each function needs)
 
 - `authHandler`: `dynamodb:GetItem`, `PutItem` on `ChirpUserAccounts`

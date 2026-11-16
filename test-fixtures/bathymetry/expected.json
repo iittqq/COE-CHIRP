@@ -1,0 +1,79 @@
+{
+  "settledWindowS": 30,
+  "files": {
+    "headerless.csv": {
+      "totalRows": 100,
+      "incompleteRows": 0,
+      "droppedLeading": 0,
+      "droppedTrailing": 0,
+      "used": 100,
+      "startMs": 1760032255069,
+      "endMs": 1760032304569,
+      "avgCm": 58.21799999999999,
+      "sdCm": 1.171925808662862,
+      "minCm": 56.00000000000001,
+      "maxCm": 60.3,
+      "settledCm": 57.43606557377049,
+      "settledN": 61,
+      "blindSpotOffset5": {
+        "totalRows": 100,
+        "incompleteRows": 0,
+        "droppedLeading": 0,
+        "droppedTrailing": 0,
+        "used": 100,
+        "startMs": 1760032255069,
+        "endMs": 1760032304569,
+        "avgCm": 63.21799999999999,
+        "sdCm": 1.1719258086628617,
+        "minCm": 61.00000000000001,
+        "maxCm": 65.3,
+        "settledCm": 62.43606557377049,
+        "settledN": 61
+      }
+    },
+    "header.csv": {
+      "totalRows": 42,
+      "incompleteRows": 3,
+      "droppedLeading": 2,
+      "droppedTrailing": 0,
+      "used": 37,
+      "startMs": 1760032255069,
+      "endMs": 1760032294069,
+      "avgCm": 45.148648648648646,
+      "sdCm": 0.11695588347184192,
+      "minCm": 45.0,
+      "maxCm": 45.300000000000004,
+      "settledCm": 45.153333333333336,
+      "settledN": 30
+    },
+    "unsorted.csv": {
+      "totalRows": 80,
+      "incompleteRows": 0,
+      "droppedLeading": 0,
+      "droppedTrailing": 0,
+      "used": 80,
+      "startMs": 1760035855069,
+      "endMs": 1760035934069,
+      "avgCm": 51.25,
+      "sdCm": 2.1787233516529785,
+      "minCm": 50.0,
+      "maxCm": 55.00000000000001,
+      "settledCm": 53.22580645161291,
+      "settledN": 31
+    }
+  },
+  "errors": {
+    "swapped.csv": "timestamp in column 4",
+    "missing_time_header.csv": "missing required column",
+    "seconds_timestamp.csv": "not a Unix timestamp in milliseconds"
+  },
+  "depthChange": {
+    "inputs": [
+      "unsorted.csv",
+      "headerless.csv"
+    ],
+    "changeCm": -4.210259122157581,
+    "earliest": "headerless.csv",
+    "latest": "unsorted.csv"
+  }
+}

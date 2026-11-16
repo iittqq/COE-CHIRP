@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:ionicons_plus/ionicons_plus.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:share_plus/share_plus.dart';
+import '../utils/acquisition.dart';
+import '../utils/depth_processing.dart';
 import '../utils/scan_repo.dart';
 import '../utils/units_repository.dart';
 
@@ -51,11 +53,6 @@ class _CompareScansPageState extends State<CompareScansPage> {
     );
   }
 
-  double? _toDouble(dynamic value) {
-    if (value is num) return value.toDouble();
-    return double.tryParse(value.toString());
-  }
-
   String _timeLabel(double secondsValue) {
     final totalSeconds = secondsValue.round().clamp(0, 999999);
     final minutes = totalSeconds ~/ 60;
@@ -63,77 +60,47 @@ class _CompareScansPageState extends State<CompareScansPage> {
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 
-  double? _calcSettledDepth(List<List<dynamic>> rows) {
-    final vals = <double>[];
+  // Same processing as the analysis screen and the web app
+  // (lib/utils/depth_processing.dart).
+  ProcessedScan? _processed(ScanData scan) => tryProcessBathymetry(
+    scan.bathymetryRows,
+    blindSpotOffsetCm: acquisitionNumber(scan.acquisition, 'blindSpotOffsetCm'),
+  ).scan;
 
-    for (final row in rows) {
-      if (row.length < 5) continue;
-
-      final depthMeters = _toDouble(row[2]);
-      if (depthMeters == null) continue;
-
-      vals.add(cmToDisplayUnit(depthMeters * 100, _isMetric));
-    }
-
-    if (vals.isEmpty) return null;
-
-    final lastCount = vals.length >= 20 ? 20 : vals.length;
-    final lastVals = vals.sublist(vals.length - lastCount);
-
-    double total = 0;
-    for (final v in lastVals) {
-      total += v;
-    }
-
-    return total / lastVals.length;
+  double? _calcSettledDepth(ScanData scan) {
+    final p = _processed(scan);
+    final settled = p == null ? null : settledDepth(p);
+    return settled == null ? null : cmToDisplayUnit(settled.depthCm, _isMetric);
   }
 
-  double? _calcChange() {
-    final settledList = <double>[];
-
+  // Signed: settled depth of the chronologically latest scan minus the
+  // earliest. Negative = mudline rose toward the sonar.
+  ({double change, String from, String to, String meaning})? _calcChange() {
+    final valid = <ScanData>[];
+    final processed = <ProcessedScan>[];
     for (final scan in widget.scans) {
-      final val = _calcSettledDepth(scan.bathymetryRows);
-      if (val != null) {
-        settledList.add(val);
-      }
+      final p = _processed(scan);
+      if (p == null) continue;
+      valid.add(scan);
+      processed.add(p);
     }
-
-    if (settledList.length < 2) return null;
-
-    double low = settledList.first;
-    double high = settledList.first;
-
-    for (final v in settledList) {
-      if (v < low) low = v;
-      if (v > high) high = v;
-    }
-
-    return high - low;
+    final result = depthChange(processed);
+    if (result == null) return null;
+    return (
+      change: cmToDisplayUnit(result.changeCm, _isMetric),
+      from: valid[result.earliestIndex].title,
+      to: valid[result.latestIndex].title,
+      meaning: describeDepthChange(result.changeCm),
+    );
   }
 
-  List<FlSpot> _graphSpots(List<List<dynamic>> rows) {
-    final validRows = rows.where((row) => row.length >= 5).toList();
-    if (validRows.isEmpty) return [];
-
-    final points = <FlSpot>[];
-
-    for (final row in validRows) {
-      final depthMeters = _toDouble(row[2]);
-      final timestampMs = _toDouble(row[4]);
-
-      if (depthMeters == null || timestampMs == null) continue;
-
-      final depthDisplay = cmToDisplayUnit(depthMeters * 100, _isMetric);
-      points.add(FlSpot(timestampMs, depthDisplay));
-    }
-
-    if (points.isEmpty) return [];
-
-    points.sort((a, b) => a.x.compareTo(b.x));
-
-    final firstTime = points.first.x;
-    return points
-        .map((point) => FlSpot((point.x - firstTime) / 1000.0, -point.y))
+  List<FlSpot> _graphSpots(ScanData scan) {
+    final p = _processed(scan);
+    if (p == null) return [];
+    return depthSeries(p)
+        .map(
+          (pt) => FlSpot(pt.seconds, -cmToDisplayUnit(pt.depthCm, _isMetric)),
+        )
         .toList();
   }
 
@@ -467,7 +434,7 @@ class _CompareScansPageState extends State<CompareScansPage> {
     final bars = <LineChartBarData>[];
 
     for (int i = 0; i < widget.scans.length; i++) {
-      final spots = _graphSpots(widget.scans[i].bathymetryRows);
+      final spots = _graphSpots(widget.scans[i]);
       if (spots.isEmpty) continue;
 
       final color = _colors[i % _colors.length];
@@ -518,12 +485,26 @@ class _CompareScansPageState extends State<CompareScansPage> {
           const SizedBox(height: 8),
           Text(
             change != null
-                ? "${change.toStringAsFixed(2)} ${depthUnitLabel(_isMetric)}"
+                ? "${change.change > 0 ? '+' : ''}${change.change.toStringAsFixed(2)} "
+                      "${depthUnitLabel(_isMetric)} (${change.meaning})"
                 : "—",
             style: const TextStyle(
               fontSize: 24,
               fontWeight: FontWeight.w800,
               color: Color(0xFF111827),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            change != null
+                ? "Settled depth of ${change.to} (latest) minus ${change.from} "
+                      "(earliest). Settled = mean of the last ${settledWindowS}s. "
+                      "Negative = mudline rose."
+                : "Needs at least two scans with bathymetry data.",
+            style: const TextStyle(
+              fontSize: 11,
+              color: Color(0xFF6B7280),
+              fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 12),
@@ -532,7 +513,7 @@ class _CompareScansPageState extends State<CompareScansPage> {
               builder: (context) {
                 final i = entry.key;
                 final scan = entry.value;
-                final settled = _calcSettledDepth(scan.bathymetryRows);
+                final settled = _calcSettledDepth(scan);
                 final color = _colors[i % _colors.length];
 
                 return Padding(
